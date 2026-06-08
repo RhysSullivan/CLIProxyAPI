@@ -898,19 +898,6 @@ func (s *Service) registerResolvedModelsForAuth(a *coreauth.Auth, providerKey st
 		GlobalModelRegistry().UnregisterClient(a.ID)
 		return
 	}
-	// Per-account aliasing: in addition to the pooled (deduplicated) model names,
-	// expose each OAuth account's models under a name suffixed with the account
-	// email (e.g. "gpt-5.4 - rhys@example.com"). The suffixed name is registered
-	// only under this auth's ID, so a request for it routes to this account, and
-	// the suffix is stripped before the upstream call (see executionModelCandidates).
-	if email := a.AccountEmail(); email != "" {
-		suffix := coreauth.AccountModelSeparator + email
-		for _, model := range normalizedModels {
-			clone := *model
-			clone.ID = model.ID + suffix
-			normalizedModels = append(normalizedModels, &clone)
-		}
-	}
 	GlobalModelRegistry().RegisterClient(a.ID, providerKey, normalizedModels)
 }
 
