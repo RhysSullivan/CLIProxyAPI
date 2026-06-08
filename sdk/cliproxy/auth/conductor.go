@@ -571,6 +571,12 @@ func (m *Manager) executionModelCandidates(auth *Auth, routeModel string) []stri
 			return []string{homeModel}
 		}
 	}
+	// Strip the per-account email suffix (e.g. "gpt-5.4 - rhys@example.com") so the
+	// upstream provider receives the real model name. Selection/routing keep the
+	// suffixed name so the request stays pinned to the registering account.
+	if base, _, ok := SplitAccountModelSuffix(routeModel); ok {
+		routeModel = base
+	}
 	requestedModel := rewriteModelForAuth(routeModel, auth)
 	requestedModel = m.applyOAuthModelAlias(auth, requestedModel)
 	if pool := m.resolveOpenAICompatUpstreamModelPool(auth, requestedModel); len(pool) > 0 {
