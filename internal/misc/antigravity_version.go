@@ -38,9 +38,9 @@ var (
 // StartAntigravityVersionUpdater starts a background goroutine that periodically refreshes the cached antigravity version.
 // This is intentionally decoupled from request execution to avoid blocking executors on version lookups.
 func StartAntigravityVersionUpdater(ctx context.Context) {
-	antigravityUpdaterOnce.Do(func() {
-		go runAntigravityVersionUpdater(ctx)
-	})
+	// Pinned personal build: never fetch the latest antigravity version remotely; use the fallback.
+	_ = ctx
+	log.Info("auto-update disabled (pinned build): antigravity version updater not started")
 }
 
 func runAntigravityVersionUpdater(ctx context.Context) {
