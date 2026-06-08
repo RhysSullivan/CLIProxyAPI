@@ -26,11 +26,12 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	rawJSON, _ = sjson.DeleteBytes(rawJSON, "max_completion_tokens")
 	rawJSON, _ = sjson.DeleteBytes(rawJSON, "temperature")
 	rawJSON, _ = sjson.DeleteBytes(rawJSON, "top_p")
-	if v := gjson.GetBytes(rawJSON, "service_tier"); v.Exists() {
-		if v.String() != "priority" {
-			rawJSON, _ = sjson.DeleteBytes(rawJSON, "service_tier")
-		}
-	}
+	// Force the priority ("fast") service tier on every Codex request so fast mode
+	// works through the proxy regardless of what the client sends — the desktop app
+	// hides its tier selector for custom providers and would otherwise send no/“fast”
+	// tier (which the upstream rejects). Accounts not entitled to priority degrade
+	// gracefully to "default" upstream (no error).
+	rawJSON, _ = sjson.SetBytes(rawJSON, "service_tier", "priority")
 
 	rawJSON, _ = sjson.DeleteBytes(rawJSON, "truncation")
 	rawJSON = applyResponsesCompactionCompatibility(rawJSON)
