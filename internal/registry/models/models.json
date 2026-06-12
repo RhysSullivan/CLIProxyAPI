@@ -1,6 +1,29 @@
 {
   "claude": [
     {
+      "id": "claude-fable-5",
+      "object": "model",
+      "created": 1780300000,
+      "owned_by": "anthropic",
+      "type": "claude",
+      "display_name": "Claude Fable 5",
+      "description": "Latest frontier Claude model",
+      "context_length": 1000000,
+      "max_completion_tokens": 128000,
+      "thinking": {
+        "min": 1024,
+        "max": 128000,
+        "zero_allowed": true,
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    {
       "id": "claude-haiku-4-5-20251001",
       "object": "model",
       "created": 1759276800,
