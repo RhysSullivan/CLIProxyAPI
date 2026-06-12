@@ -466,6 +466,11 @@ func (s *Server) setupRoutes() {
 			},
 		})
 	})
+	// Connectivity preflight: clients like Claude Code (Bun runtime) send HEAD /
+	// to check the endpoint is reachable; answer 200 so they proceed to /v1/messages.
+	s.engine.HEAD("/", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
 	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
 
 	// OAuth callback endpoints (reuse main server port)
