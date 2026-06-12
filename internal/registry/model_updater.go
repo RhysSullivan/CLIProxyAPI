@@ -75,9 +75,9 @@ func init() {
 // immediately on startup and then refreshes the model catalog every 3 hours.
 // Safe to call multiple times; only one updater will run.
 func StartModelsUpdater(ctx context.Context) {
-	// Pinned personal build: never fetch the remote model catalog; rely on the embedded models.json.
-	_ = ctx
-	log.Info("auto-update disabled (pinned build): remote model catalog updater not started; using embedded catalog")
+	updaterOnce.Do(func() {
+		go runModelsUpdater(ctx)
+	})
 }
 
 func runModelsUpdater(ctx context.Context) {
