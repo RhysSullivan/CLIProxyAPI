@@ -218,6 +218,13 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// A 1h-TTL block must not appear after a 5m-TTL block in evaluation order (tools→system→messages).
 	body = normalizeCacheControlTTL(body)
 
+	// On the first request of a conversation, write a 1h cache TTL into the body
+	// (cache_control.ttl) so the freshly-established prefix stays warm for an hour.
+	// Later turns hit and refresh it, so the 1h write premium is paid only once.
+	if isFirstConversationRequest(body) {
+		body = forceCacheControlTTL(body, "1h")
+	}
+
 	// Extract betas from body and convert to header
 	var extraBetas []string
 	extraBetas, body = extractAndRemoveBetas(body)
@@ -395,6 +402,13 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 	// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
 	body = normalizeCacheControlTTL(body)
+
+	// On the first request of a conversation, write a 1h cache TTL into the body
+	// (cache_control.ttl) so the freshly-established prefix stays warm for an hour.
+	// Later turns hit and refresh it, so the 1h write premium is paid only once.
+	if isFirstConversationRequest(body) {
+		body = forceCacheControlTTL(body, "1h")
+	}
 
 	// Extract betas from body and convert to header
 	var extraBetas []string
@@ -2034,6 +2048,89 @@ func normalizeCacheControlTTL(payload []byte) []byte {
 	if !modified {
 		return original
 	}
+	return payload
+}
+
+// isFirstConversationRequest reports whether this is the opening turn of a
+// conversation — i.e. the message history contains no assistant turn yet. Claude
+// Code's first request carries a single user message; every later request
+// includes at least one prior assistant message. The check is body-only, so it
+// needs no session state.
+func isFirstConversationRequest(payload []byte) bool {
+	messages := gjson.GetBytes(payload, "messages")
+	if !messages.IsArray() {
+		return false
+	}
+	firstTurn := true
+	messages.ForEach(func(_, msg gjson.Result) bool {
+		if msg.Get("role").String() == "assistant" {
+			firstTurn = false
+			return false
+		}
+		return true
+	})
+	return firstTurn
+}
+
+// forceCacheControlTTL rewrites the ttl of every existing cache_control block in
+// the payload to ttl (e.g. "1h"). It only upgrades breakpoints already present
+// (client-supplied or injected by ensureCacheControl); it never adds new ones, so
+// it can't push the request past Anthropic's 4-breakpoint limit. The TTL is set in
+// the request body (cache_control.ttl) — the supported mechanism, no beta header
+// required. A uniform TTL across all blocks cannot violate the
+// prompt-caching-scope ordering rule (a 1h block must not follow a 5m block), so
+// this is safe to run after normalizeCacheControlTTL.
+func forceCacheControlTTL(payload []byte, ttl string) []byte {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return payload
+	}
+
+	setTTL := func(path string, obj gjson.Result) {
+		cc := obj.Get("cache_control")
+		if !cc.Exists() || !cc.IsObject() {
+			return
+		}
+		if cc.Get("ttl").String() == ttl {
+			return
+		}
+		updated, err := sjson.SetBytes(payload, path+".cache_control.ttl", ttl)
+		if err != nil {
+			return
+		}
+		payload = updated
+	}
+
+	tools := gjson.GetBytes(payload, "tools")
+	if tools.IsArray() {
+		tools.ForEach(func(idx, item gjson.Result) bool {
+			setTTL(fmt.Sprintf("tools.%d", int(idx.Int())), item)
+			return true
+		})
+	}
+
+	system := gjson.GetBytes(payload, "system")
+	if system.IsArray() {
+		system.ForEach(func(idx, item gjson.Result) bool {
+			setTTL(fmt.Sprintf("system.%d", int(idx.Int())), item)
+			return true
+		})
+	}
+
+	messages := gjson.GetBytes(payload, "messages")
+	if messages.IsArray() {
+		messages.ForEach(func(msgIdx, msg gjson.Result) bool {
+			content := msg.Get("content")
+			if !content.IsArray() {
+				return true
+			}
+			content.ForEach(func(itemIdx, item gjson.Result) bool {
+				setTTL(fmt.Sprintf("messages.%d.content.%d", int(msgIdx.Int()), int(itemIdx.Int())), item)
+				return true
+			})
+			return true
+		})
+	}
+
 	return payload
 }
 

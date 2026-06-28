@@ -256,3 +256,116 @@ func TestCacheControlOrder(t *testing.T) {
 
 	t.Log("cache order correct: tools -> system")
 }
+
+func TestForceCacheControlTTL1hOnFirstRequest(t *testing.T) {
+	// First request: single user message, client-supplied 5m breakpoints on
+	// tools, system, and the user message. All should be upgraded to 1h.
+	t.Run("Upgrades all breakpoints to 1h on first turn", func(t *testing.T) {
+		input := []byte(`{
+			"model": "claude-sonnet-4-6",
+			"tools": [{"name": "t1", "cache_control": {"type": "ephemeral"}}],
+			"system": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}],
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}
+			]
+		}`)
+		if !isFirstConversationRequest(input) {
+			t.Fatalf("expected first-conversation request")
+		}
+		out := forceCacheControlTTL(input, "1h")
+		for _, p := range []string{
+			"tools.0.cache_control.ttl",
+			"system.0.cache_control.ttl",
+			"messages.0.content.0.cache_control.ttl",
+		} {
+			if got := gjson.GetBytes(out, p).String(); got != "1h" {
+				t.Errorf("%s = %q, want 1h. Output: %s", p, got, string(out))
+			}
+		}
+	})
+
+	// Later request: history contains an assistant turn, so it is not the first
+	// request and TTLs are left untouched by the caller.
+	t.Run("Detects non-first turn", func(t *testing.T) {
+		input := []byte(`{
+			"messages": [
+				{"role": "user", "content": "a"},
+				{"role": "assistant", "content": "b"},
+				{"role": "user", "content": "c"}
+			]
+		}`)
+		if isFirstConversationRequest(input) {
+			t.Errorf("expected non-first request when an assistant turn is present")
+		}
+	})
+
+	// forceCacheControlTTL must not add breakpoints to blocks that lack one.
+	t.Run("Does not create new breakpoints", func(t *testing.T) {
+		input := []byte(`{"system": [{"type": "text", "text": "sys"}], "messages": []}`)
+		out := forceCacheControlTTL(input, "1h")
+		if gjson.GetBytes(out, "system.0.cache_control").Exists() {
+			t.Errorf("should not inject cache_control where absent. Output: %s", string(out))
+		}
+	})
+}
+
+// TestCachePipelineFirstRequest1h mirrors the exact ordered cache pipeline the
+// Claude executor runs (ensure-if-empty → enforce limit → normalize → force-1h
+// on first turn) to prove a first-turn request leaves every breakpoint at 1h,
+// while a follow-up turn keeps the client's 5m default.
+func TestCachePipelineFirstRequest1h(t *testing.T) {
+	pipeline := func(body []byte) []byte {
+		if countCacheControls(body) == 0 {
+			body = ensureCacheControl(body)
+		}
+		body = enforceCacheControlLimit(body, 4)
+		body = normalizeCacheControlTTL(body)
+		if isFirstConversationRequest(body) {
+			body = forceCacheControlTTL(body, "1h")
+		}
+		return body
+	}
+
+	t.Run("First turn -> all breakpoints 1h", func(t *testing.T) {
+		// Mimics Claude Code's opening request: client-supplied 5m breakpoints.
+		in := []byte(`{
+			"model":"claude-sonnet-4-6",
+			"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral"}}],
+			"tools":[{"name":"t","description":"d","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}],
+			"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]
+		}`)
+		out := pipeline(in)
+		for _, p := range []string{
+			"system.0.cache_control.ttl",
+			"tools.0.cache_control.ttl",
+			"messages.0.content.0.cache_control.ttl",
+		} {
+			if got := gjson.GetBytes(out, p).String(); got != "1h" {
+				t.Errorf("%s = %q, want 1h\nout: %s", p, got, out)
+			}
+		}
+		// Still within Anthropic's 4-breakpoint limit.
+		if n := countCacheControls(out); n > 4 {
+			t.Errorf("breakpoints = %d, want <= 4", n)
+		}
+	})
+
+	t.Run("Second turn -> TTLs untouched (5m default)", func(t *testing.T) {
+		in := []byte(`{
+			"model":"claude-sonnet-4-6",
+			"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral"}}],
+			"messages":[
+				{"role":"user","content":[{"type":"text","text":"q1"}]},
+				{"role":"assistant","content":[{"type":"text","text":"a1"}]},
+				{"role":"user","content":[{"type":"text","text":"q2","cache_control":{"type":"ephemeral"}}]}
+			]
+		}`)
+		out := pipeline(in)
+		if gjson.GetBytes(out, "system.0.cache_control.ttl").Exists() {
+			t.Errorf("second turn should keep 5m default (no ttl) on system\nout: %s", out)
+		}
+		if gjson.GetBytes(out, "messages.2.content.0.cache_control.ttl").Exists() {
+			t.Errorf("second turn should keep 5m default (no ttl) on message\nout: %s", out)
+		}
+	})
+}
