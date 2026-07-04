@@ -1425,6 +1425,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	if s.cacheTracker != nil {
 		s.cacheTracker.Stop()
 	}
+	if s.poolUsage != nil {
+		s.poolUsage.Stop()
+	}
 
 	if s.keepAliveEnabled {
 		select {
