@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func TestClaudeAndCodexAccountsParsedAndMapped(t *testing.T) {
@@ -73,14 +74,20 @@ func TestClaudeAndCodexAccountsParsedAndMapped(t *testing.T) {
 	if codex.SevenDayResetsAt != "2026-07-09T14:00:00Z" {
 		t.Fatalf("codex weekly reset = %q", codex.SevenDayResetsAt)
 	}
-	if len(codex.Scoped) != 2 {
-		t.Fatalf("codex scoped len = %d, want 2: %+v", len(codex.Scoped), codex.Scoped)
+	if len(codex.Scoped) != 4 {
+		t.Fatalf("codex scoped len = %d, want 4: %+v", len(codex.Scoped), codex.Scoped)
 	}
 	if codex.Scoped[0].Name != "Codex Spark 5-hour" || codex.Scoped[0].Percent != 7 {
 		t.Fatalf("codex scoped[0] = %+v", codex.Scoped[0])
 	}
 	if codex.Scoped[1].Name != "Codex Spark Weekly" || codex.Scoped[1].Percent != 19 {
 		t.Fatalf("codex scoped[1] = %+v", codex.Scoped[1])
+	}
+	if codex.Scoped[2].Name != "GPT-5.3-Codex-Research 5-hour" || codex.Scoped[2].Percent != 11 {
+		t.Fatalf("codex scoped[2] = %+v", codex.Scoped[2])
+	}
+	if codex.Scoped[3].Name != "GPT-5.3-Codex-Research Weekly" || codex.Scoped[3].Percent != 29 {
+		t.Fatalf("codex scoped[3] = %+v", codex.Scoped[3])
 	}
 	if !codex.OK || codex.Stale || codex.LastError != nil || codex.FetchedAt == nil {
 		t.Fatalf("codex status fields = ok:%t stale:%t lastError:%v fetchedAt:%v", codex.OK, codex.Stale, codex.LastError, codex.FetchedAt)
@@ -218,6 +225,43 @@ func TestDisabledCodexFileSkipped(t *testing.T) {
 	}
 	if upstream.Total() != 0 {
 		t.Fatalf("upstream calls = %d, want 0", upstream.Total())
+	}
+}
+
+func TestDisabledClaudeFileReturnsErrorRow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	authDir := t.TempDir()
+	writeAuthFile(t, authDir, "claude-disabled@example.com.json", `{
+		"email": "disabled@example.com",
+		"access_token": "claude-token",
+		"disabled": true
+	}`)
+
+	upstream := newPoolUsageFakeUpstream(t)
+	defer upstream.Close()
+	h := newTestHandler(authDir, upstream)
+	h.refreshDue(context.Background(), true)
+
+	accounts := getUsageAccounts(t, h)
+	if len(accounts) != 1 {
+		t.Fatalf("accounts len = %d, want 1: %+v", len(accounts), accounts)
+	}
+	a := accounts[0]
+	if a.OK || a.Error != "disabled" {
+		t.Fatalf("disabled claude status = ok:%t error:%q", a.OK, a.Error)
+	}
+	if a.LastError == nil || *a.LastError != "disabled" {
+		t.Fatalf("lastError = %v, want disabled", a.LastError)
+	}
+	if upstream.Total() != 0 {
+		t.Fatalf("upstream calls = %d, want 0", upstream.Total())
+	}
+}
+
+func TestCodexResetStringTreatsResetAtAsAbsoluteEpoch(t *testing.T) {
+	got := codexResetString(gjson.Parse("3600"))
+	if got != "1970-01-01T01:00:00Z" {
+		t.Fatalf("codex reset = %q, want absolute epoch timestamp", got)
 	}
 }
 
@@ -375,6 +419,21 @@ func (f *poolUsageFakeUpstream) handle(w http.ResponseWriter, r *http.Request) {
 					},
 					"secondary_window": {
 						"used_percent": 19,
+						"reset_at": 1783605600,
+						"limit_window_seconds": 604800
+					}
+				}
+			}, {
+				"limit_name": "GPT-5.3-Codex-Research",
+				"metered_feature": "codex_research",
+				"rate_limit": {
+					"primary_window": {
+						"used_percent": 11,
+						"reset_at": 1783217400,
+						"limit_window_seconds": 18000
+					},
+					"secondary_window": {
+						"used_percent": 29,
 						"reset_at": 1783605600,
 						"limit_window_seconds": 604800
 					}

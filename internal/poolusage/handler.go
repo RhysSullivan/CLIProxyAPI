@@ -516,6 +516,7 @@ func (h *Handler) fetchAccount(ctx context.Context, rec authAccount, fetchedAt t
 func (h *Handler) fetchClaude(ctx context.Context, rec authAccount, fetchedAt time.Time) (account, error) {
 	a := account{Provider: string(providerClaude), Email: rec.Email}
 	if rec.Disabled {
+		// Disabled Claude rows stay visible for legacy consumers; Codex disabled files are skipped at discovery.
 		return a, fmt.Errorf("disabled")
 	}
 	if rec.Token == "" {
@@ -577,9 +578,9 @@ func (h *Handler) fetchCodex(ctx context.Context, rec authAccount, fetchedAt tim
 	if v := gjson.GetBytes(usage, "plan_type").String(); v != "" {
 		a.Tier = v
 	}
-	h.applyCodexWindow(&a.FiveHourUtil, &a.FiveHourResetsAt, gjson.GetBytes(usage, "rate_limit.primary_window"), fetchedAt)
-	h.applyCodexWindow(&a.SevenDayUtil, &a.SevenDayResetsAt, gjson.GetBytes(usage, "rate_limit.secondary_window"), fetchedAt)
-	a.Scoped = codexScopedLimits(gjson.GetBytes(usage, "additional_rate_limits"), fetchedAt)
+	h.applyCodexWindow(&a.FiveHourUtil, &a.FiveHourResetsAt, gjson.GetBytes(usage, "rate_limit.primary_window"))
+	h.applyCodexWindow(&a.SevenDayUtil, &a.SevenDayResetsAt, gjson.GetBytes(usage, "rate_limit.secondary_window"))
+	a.Scoped = codexScopedLimits(gjson.GetBytes(usage, "additional_rate_limits"))
 	a.OK = true
 	a.Stale = false
 	t := fetchedAt.UTC()
@@ -587,7 +588,7 @@ func (h *Handler) fetchCodex(ctx context.Context, rec authAccount, fetchedAt tim
 	return a, nil
 }
 
-func (h *Handler) applyCodexWindow(util **float64, resetsAt *string, window gjson.Result, fetchedAt time.Time) {
+func (h *Handler) applyCodexWindow(util **float64, resetsAt *string, window gjson.Result) {
 	if !window.Exists() || window.Type == gjson.Null {
 		return
 	}
@@ -595,40 +596,51 @@ func (h *Handler) applyCodexWindow(util **float64, resetsAt *string, window gjso
 		f := v.Float()
 		*util = &f
 	}
-	*resetsAt = codexResetString(window.Get("reset_at"), fetchedAt)
+	*resetsAt = codexResetString(window.Get("reset_at"))
 }
 
-func codexScopedLimits(raw gjson.Result, fetchedAt time.Time) []scopedLimit {
+func codexScopedLimits(raw gjson.Result) []scopedLimit {
 	if !raw.IsArray() {
 		return nil
 	}
 	out := make([]scopedLimit, 0)
 	for _, lim := range raw.Array() {
 		if strings.Contains(strings.ToLower(firstNonEmpty(lim.Get("limit_name"), lim.Get("metered_feature"))), "spark") {
-			out = append(out, codexSparkScopedLimits(lim, fetchedAt)...)
-			continue
-		}
-		window := lim.Get("rate_limit.primary_window")
-		if !window.Exists() || window.Type == gjson.Null {
-			window = lim.Get("rate_limit.secondary_window")
-		}
-		if !window.Exists() || window.Type == gjson.Null {
+			out = append(out, codexSparkScopedLimits(lim)...)
 			continue
 		}
 		name := firstNonEmpty(lim.Get("limit_name"), lim.Get("metered_feature"))
 		if name == "" {
 			continue
 		}
+		out = append(out, codexNamedScopedLimits(name, lim)...)
+	}
+	return out
+}
+
+func codexNamedScopedLimits(name string, lim gjson.Result) []scopedLimit {
+	var out []scopedLimit
+	for _, candidate := range []struct {
+		name string
+		path string
+	}{
+		{name: name + " 5-hour", path: "rate_limit.primary_window"},
+		{name: name + " Weekly", path: "rate_limit.secondary_window"},
+	} {
+		window := lim.Get(candidate.path)
+		if !window.Exists() || window.Type == gjson.Null {
+			continue
+		}
 		out = append(out, scopedLimit{
-			Name:     name,
+			Name:     candidate.name,
 			Percent:  window.Get("used_percent").Float(),
-			ResetsAt: codexResetString(window.Get("reset_at"), fetchedAt),
+			ResetsAt: codexResetString(window.Get("reset_at")),
 		})
 	}
 	return out
 }
 
-func codexSparkScopedLimits(lim gjson.Result, fetchedAt time.Time) []scopedLimit {
+func codexSparkScopedLimits(lim gjson.Result) []scopedLimit {
 	var out []scopedLimit
 	for _, candidate := range []struct {
 		name string
@@ -644,7 +656,7 @@ func codexSparkScopedLimits(lim gjson.Result, fetchedAt time.Time) []scopedLimit
 		out = append(out, scopedLimit{
 			Name:     candidate.name,
 			Percent:  window.Get("used_percent").Float(),
-			ResetsAt: codexResetString(window.Get("reset_at"), fetchedAt),
+			ResetsAt: codexResetString(window.Get("reset_at")),
 		})
 	}
 	return out
@@ -659,7 +671,7 @@ func firstNonEmpty(values ...gjson.Result) string {
 	return ""
 }
 
-func codexResetString(raw gjson.Result, fetchedAt time.Time) string {
+func codexResetString(raw gjson.Result) string {
 	if !raw.Exists() || raw.Type == gjson.Null {
 		return ""
 	}
@@ -667,13 +679,7 @@ func codexResetString(raw gjson.Result, fetchedAt time.Time) string {
 	if seconds <= 0 {
 		return ""
 	}
-	var t time.Time
-	if seconds < 1_000_000_000 {
-		t = fetchedAt.Add(time.Duration(seconds) * time.Second)
-	} else {
-		t = time.Unix(seconds, 0)
-	}
-	return t.UTC().Format(time.RFC3339)
+	return time.Unix(seconds, 0).UTC().Format(time.RFC3339)
 }
 
 func (h *Handler) getClaude(ctx context.Context, token, requestPath string) ([]byte, error) {
