@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/cachestatus"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
@@ -257,6 +258,21 @@ func setServiceTierMetadata(meta map[string]any, rawJSON []byte) {
 		}
 	}
 	meta[coreexecutor.ServiceTierMetadataKey] = serviceTier
+}
+
+// withCacheSessionContext propagates the Claude affinity session ID and the
+// effective prompt-cache TTL on the request context so the cache-status usage
+// plugin can correlate response cache tokens to a session. Only Claude Code
+// affinity sessions (the "claude:" prefix) are tracked; other traffic is left
+// untouched.
+func withCacheSessionContext(ctx context.Context, rawJSON []byte, meta map[string]any) context.Context {
+	sid := coreauth.ExtractSessionID(headersFromContext(ctx), rawJSON, meta)
+	if !strings.HasPrefix(sid, "claude:") {
+		return ctx
+	}
+	ctx = coreusage.WithSessionID(ctx, sid)
+	ctx = coreusage.WithCacheTTL(ctx, cachestatus.DetectInboundCacheTTL(rawJSON))
+	return ctx
 }
 
 // headersFromContext extracts the original HTTP request headers from the gin context
@@ -586,6 +602,7 @@ func (h *BaseAPIHandler) executeWithAuthManager(ctx context.Context, handlerType
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = modelName
 	setReasoningEffortMetadata(reqMeta, handlerType, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
+	ctx = withCacheSessionContext(ctx, rawJSON, reqMeta)
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil
@@ -699,6 +716,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = modelName
 	setReasoningEffortMetadata(reqMeta, handlerType, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
+	ctx = withCacheSessionContext(ctx, rawJSON, reqMeta)
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil

@@ -29,11 +29,13 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v7/internal/api/modules/amp"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/cachestatus"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/poolusage"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
@@ -43,6 +45,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers/openai"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 	"gopkg.in/yaml.v3"
@@ -192,6 +195,12 @@ type Server struct {
 	// currentPath is the absolute path to the current working directory.
 	currentPath string
 
+	// cacheTracker tracks per-session Claude prompt-cache TTL state for /cache-status.
+	cacheTracker *cachestatus.Tracker
+
+	// poolUsage serves per-account subscription usage for /pool/usage.
+	poolUsage *poolusage.Handler
+
 	// wsRoutes tracks registered websocket upgrade paths.
 	wsRouteMu     sync.Mutex
 	wsRoutes      map[string]struct{}
@@ -329,6 +338,12 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// subscribe-config heartbeat connection is healthy.
 	engine.Use(s.homeHeartbeatMiddleware())
 
+	// Prompt-cache TTL tracker for the /cache-status endpoint. The usage plugin is
+	// registered by name so config hot-reload replaces rather than stacks it.
+	s.cacheTracker = cachestatus.NewTracker()
+	coreusage.RegisterNamedPlugin("cache-status", cachestatus.NewPlugin(s.cacheTracker))
+	s.poolUsage = poolusage.NewHandler(cfg.AuthDir)
+
 	// Setup routes
 	s.setupRoutes()
 
@@ -408,6 +423,15 @@ func (s *Server) setupRoutes() {
 	}
 	s.engine.GET("/healthz", healthzHandler)
 	s.engine.HEAD("/healthz", healthzHandler)
+
+	// Unauthenticated, tailnet-gated (same posture as /healthz): per-session
+	// Claude prompt-cache TTL, read by the CacheWatch menu bar app.
+	if s.cacheTracker != nil {
+		s.engine.GET("/cache-status", s.cacheTracker.Handle)
+	}
+	if s.poolUsage != nil {
+		s.engine.GET("/pool/usage", s.poolUsage.Handle)
+	}
 
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
@@ -1397,6 +1421,10 @@ func (s *Server) Start() error {
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
+
+	if s.cacheTracker != nil {
+		s.cacheTracker.Stop()
+	}
 
 	if s.keepAliveEnabled {
 		select {
