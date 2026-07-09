@@ -311,8 +311,8 @@ func TestForceCacheControlTTL1hOnFirstRequest(t *testing.T) {
 
 // TestCachePipelineFirstRequest1h mirrors the exact ordered cache pipeline the
 // Claude executor runs (ensure-if-empty → enforce limit → normalize → force-1h
-// on first turn) to prove a first-turn request leaves every breakpoint at 1h,
-// while a follow-up turn keeps the client's 5m default.
+// unconditionally) to prove every request — opening turn or follow-up — leaves
+// every breakpoint at 1h, so the whole conversation stays warm for an hour of idle.
 func TestCachePipelineFirstRequest1h(t *testing.T) {
 	pipeline := func(body []byte) []byte {
 		if countCacheControls(body) == 0 {
@@ -320,9 +320,7 @@ func TestCachePipelineFirstRequest1h(t *testing.T) {
 		}
 		body = enforceCacheControlLimit(body, 4)
 		body = normalizeCacheControlTTL(body)
-		if isFirstConversationRequest(body) {
-			body = forceCacheControlTTL(body, "1h")
-		}
+		body = forceCacheControlTTL(body, "1h")
 		return body
 	}
 
@@ -350,7 +348,7 @@ func TestCachePipelineFirstRequest1h(t *testing.T) {
 		}
 	})
 
-	t.Run("Second turn -> TTLs untouched (5m default)", func(t *testing.T) {
+	t.Run("Second turn -> also forced to 1h", func(t *testing.T) {
 		in := []byte(`{
 			"model":"claude-sonnet-4-6",
 			"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral"}}],
@@ -361,11 +359,11 @@ func TestCachePipelineFirstRequest1h(t *testing.T) {
 			]
 		}`)
 		out := pipeline(in)
-		if gjson.GetBytes(out, "system.0.cache_control.ttl").Exists() {
-			t.Errorf("second turn should keep 5m default (no ttl) on system\nout: %s", out)
+		if got := gjson.GetBytes(out, "system.0.cache_control.ttl").String(); got != "1h" {
+			t.Errorf("second turn system ttl = %q, want 1h\nout: %s", got, out)
 		}
-		if gjson.GetBytes(out, "messages.2.content.0.cache_control.ttl").Exists() {
-			t.Errorf("second turn should keep 5m default (no ttl) on message\nout: %s", out)
+		if got := gjson.GetBytes(out, "messages.2.content.0.cache_control.ttl").String(); got != "1h" {
+			t.Errorf("second turn message ttl = %q, want 1h\nout: %s", got, out)
 		}
 	})
 }

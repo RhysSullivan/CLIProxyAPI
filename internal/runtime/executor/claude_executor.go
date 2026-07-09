@@ -218,12 +218,14 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	// A 1h-TTL block must not appear after a 5m-TTL block in evaluation order (tools→system→messages).
 	body = normalizeCacheControlTTL(body)
 
-	// On the first request of a conversation, write a 1h cache TTL into the body
-	// (cache_control.ttl) so the freshly-established prefix stays warm for an hour.
-	// Later turns hit and refresh it, so the 1h write premium is paid only once.
-	if isFirstConversationRequest(body) {
-		body = forceCacheControlTTL(body, "1h")
-	}
+	// Write a 1h cache TTL into the body (cache_control.ttl) on every turn so the
+	// whole conversation — not just the opening prefix — stays warm for an hour of
+	// idle, and a conversation resumed after a >1h gap re-establishes a 1h prefix
+	// instead of permanently degrading to the client's 5m default. forceCacheControlTTL
+	// only upgrades breakpoints already present, so it never adds a breakpoint; the
+	// big stable prefix is a cache read every turn regardless, so the only added cost
+	// is the 0.75x write premium on each turn's small new increment.
+	body = forceCacheControlTTL(body, "1h")
 
 	// Extract betas from body and convert to header
 	var extraBetas []string
@@ -403,12 +405,14 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	// Normalize TTL values to prevent ordering violations under prompt-caching-scope-2026-01-05.
 	body = normalizeCacheControlTTL(body)
 
-	// On the first request of a conversation, write a 1h cache TTL into the body
-	// (cache_control.ttl) so the freshly-established prefix stays warm for an hour.
-	// Later turns hit and refresh it, so the 1h write premium is paid only once.
-	if isFirstConversationRequest(body) {
-		body = forceCacheControlTTL(body, "1h")
-	}
+	// Write a 1h cache TTL into the body (cache_control.ttl) on every turn so the
+	// whole conversation — not just the opening prefix — stays warm for an hour of
+	// idle, and a conversation resumed after a >1h gap re-establishes a 1h prefix
+	// instead of permanently degrading to the client's 5m default. forceCacheControlTTL
+	// only upgrades breakpoints already present, so it never adds a breakpoint; the
+	// big stable prefix is a cache read every turn regardless, so the only added cost
+	// is the 0.75x write premium on each turn's small new increment.
+	body = forceCacheControlTTL(body, "1h")
 
 	// Extract betas from body and convert to header
 	var extraBetas []string
