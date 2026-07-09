@@ -152,13 +152,14 @@ func (NoopHook) OnResult(context.Context, Result) {}
 
 // Manager orchestrates auth lifecycle, selection, execution, and persistence.
 type Manager struct {
-	store     Store
-	executors map[string]ProviderExecutor
-	selector  Selector
-	hook      Hook
-	mu        sync.RWMutex
-	auths     map[string]*Auth
-	scheduler *authScheduler
+	store                 Store
+	executors             map[string]ProviderExecutor
+	selector              Selector
+	usageSnapshotProvider UsageSnapshotProvider
+	hook                  Hook
+	mu                    sync.RWMutex
+	auths                 map[string]*Auth
+	scheduler             *authScheduler
 	// homeRuntimeAuths caches auths returned by Home so websocket sessions can
 	// reuse an established upstream credential without dispatching every turn.
 	homeRuntimeAuths map[string]map[string]*Auth
@@ -374,11 +375,28 @@ func (m *Manager) SetSelector(selector Selector) {
 		selector = &RoundRobinSelector{}
 	}
 	m.mu.Lock()
+	if setter, ok := selector.(UsageAwareSnapshotSetter); ok && m.usageSnapshotProvider != nil {
+		setter.SetUsageSnapshotProvider(m.usageSnapshotProvider)
+	}
 	m.selector = selector
 	m.mu.Unlock()
 	if m.scheduler != nil {
 		m.scheduler.setSelector(selector)
 		m.syncScheduler()
+	}
+}
+
+// SetUsageSnapshotProvider attaches cached usage snapshots to usage-aware selectors.
+func (m *Manager) SetUsageSnapshotProvider(provider UsageSnapshotProvider) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.usageSnapshotProvider = provider
+	selector := m.selector
+	m.mu.Unlock()
+	if setter, ok := selector.(UsageAwareSnapshotSetter); ok {
+		setter.SetUsageSnapshotProvider(provider)
 	}
 }
 

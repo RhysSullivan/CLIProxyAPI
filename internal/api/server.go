@@ -343,6 +343,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.cacheTracker = cachestatus.NewTracker()
 	coreusage.RegisterNamedPlugin("cache-status", cachestatus.NewPlugin(s.cacheTracker))
 	s.poolUsage = poolusage.NewHandler(cfg.AuthDir)
+	if authManager != nil {
+		authManager.SetUsageSnapshotProvider(s.poolUsage)
+	}
 
 	// Setup routes
 	s.setupRoutes()

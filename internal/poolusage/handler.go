@@ -23,6 +23,8 @@ import (
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 const (
@@ -233,6 +235,34 @@ func (h *Handler) Snapshot() []account {
 		}
 		return out[i].Email < out[j].Email
 	})
+	return out
+}
+
+// UsageSnapshot returns SDK-owned usage rows for routing decisions.
+func (h *Handler) UsageSnapshot() []coreauth.AccountUsage {
+	accounts := h.Snapshot()
+	out := make([]coreauth.AccountUsage, 0, len(accounts))
+	for _, account := range accounts {
+		fableAvailable := false
+		var fablePercent *float64
+		for _, scoped := range account.Scoped {
+			if strings.EqualFold(strings.TrimSpace(scoped.Name), "fable") {
+				fableAvailable = true
+				percent := scoped.Percent
+				fablePercent = &percent
+				break
+			}
+		}
+		out = append(out, coreauth.AccountUsage{
+			Provider:       account.Provider,
+			Email:          account.Email,
+			FableAvailable: fableAvailable,
+			FablePercent:   fablePercent,
+			FiveHourUtil:   account.FiveHourUtil,
+			SevenDayUtil:   account.SevenDayUtil,
+			OK:             account.OK,
+		})
+	}
 	return out
 }
 
