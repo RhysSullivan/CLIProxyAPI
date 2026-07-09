@@ -199,7 +199,6 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = ensureModelMaxTokens(body, baseModel)
-	body = applyOpusFastModeDefault(body)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -390,7 +389,6 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = ensureModelMaxTokens(body, baseModel)
-	body = applyOpusFastModeDefault(body)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -841,23 +839,6 @@ func normalizeClaudeTemperatureForThinking(body []byte) []byte {
 			return body
 		}
 		body, _ = sjson.SetBytes(body, "temperature", 1)
-	}
-	return body
-}
-
-func applyOpusFastModeDefault(body []byte) []byte {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
-		return body
-	}
-	if gjson.GetBytes(body, "speed").Exists() {
-		return body
-	}
-	model := strings.ToLower(strings.TrimSpace(thinking.ParseSuffix(gjson.GetBytes(body, "model").String()).ModelName))
-	if strings.Contains(model, "opus-4-7") || strings.Contains(model, "opus-4-8") {
-		updated, err := sjson.SetBytes(body, "speed", "fast")
-		if err == nil {
-			return updated
-		}
 	}
 	return body
 }
