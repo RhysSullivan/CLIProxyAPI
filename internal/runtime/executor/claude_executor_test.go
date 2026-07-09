@@ -65,6 +65,73 @@ func assertClaudeFingerprint(t *testing.T, headers http.Header, userAgent, pkgVe
 	}
 }
 
+func TestApplyOpusFastModeDefault(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantSpeed string
+		wantSet   bool
+	}{
+		{
+			name:      "opus 4.8 without speed adds fast",
+			body:      `{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]}`,
+			wantSpeed: "fast",
+			wantSet:   true,
+		},
+		{
+			name:      "opus 4.8 with speed standard remains untouched",
+			body:      `{"model":"claude-opus-4-8","speed":"standard","messages":[{"role":"user","content":"hi"}]}`,
+			wantSpeed: "standard",
+			wantSet:   true,
+		},
+		{
+			name:    "opus 4.6 untouched",
+			body:    `{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}]}`,
+			wantSet: false,
+		},
+		{
+			name:    "fable untouched",
+			body:    `{"model":"claude-fable-5","messages":[{"role":"user","content":"hi"}]}`,
+			wantSet: false,
+		},
+		{
+			name:      "opus 4.8 thinking suffix adds fast",
+			body:      `{"model":"claude-opus-4-8(high)","messages":[{"role":"user","content":"hi"}]}`,
+			wantSpeed: "fast",
+			wantSet:   true,
+		},
+		{
+			name:      "opus 4.8 bracket variant adds fast",
+			body:      `{"model":"claude-opus-4-8[1m]","messages":[{"role":"user","content":"hi"}]}`,
+			wantSpeed: "fast",
+			wantSet:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := applyOpusFastModeDefault([]byte(tt.body))
+			speed := gjson.GetBytes(got, "speed")
+			if speed.Exists() != tt.wantSet {
+				t.Fatalf("speed exists = %v, want %v; body=%s", speed.Exists(), tt.wantSet, got)
+			}
+			if tt.wantSet && speed.String() != tt.wantSpeed {
+				t.Fatalf("speed = %q, want %q; body=%s", speed.String(), tt.wantSpeed, got)
+			}
+		})
+	}
+}
+
+func TestApplyClaudeHeadersEnsuresFastModeBeta(t *testing.T) {
+	req := newClaudeHeaderTestRequest(t, http.Header{"Anthropic-Beta": []string{"custom-beta"}})
+	applyClaudeHeaders(req, &cliproxyauth.Auth{}, "key-fast-beta", false, nil, &config.Config{})
+
+	beta := req.Header.Get("Anthropic-Beta")
+	if !strings.Contains(beta, "fast-mode-2026-02-01") {
+		t.Fatalf("Anthropic-Beta = %q, want fast-mode-2026-02-01", beta)
+	}
+}
+
 func TestApplyClaudeHeaders_UsesConfiguredBaselineFingerprint(t *testing.T) {
 	resetClaudeDeviceProfileCache()
 	stabilize := true

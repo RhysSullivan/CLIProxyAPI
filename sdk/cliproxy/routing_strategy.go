@@ -11,10 +11,12 @@ func normalizeRoutingStrategy(strategy string) string {
 	switch strings.ToLower(strings.TrimSpace(strategy)) {
 	case "fill-first", "fillfirst", "ff":
 		return "fill-first"
+	case "round-robin", "roundrobin", "rr":
+		return "round-robin"
 	case "usage-aware", "usageaware", "ua":
 		return "usage-aware"
 	default:
-		return "round-robin"
+		return "usage-aware"
 	}
 }
 

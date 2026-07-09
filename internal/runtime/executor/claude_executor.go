@@ -199,6 +199,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = ensureModelMaxTokens(body, baseModel)
+	body = applyOpusFastModeDefault(body)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -389,6 +390,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body = ensureModelMaxTokens(body, baseModel)
+	body = applyOpusFastModeDefault(body)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -843,6 +845,23 @@ func normalizeClaudeTemperatureForThinking(body []byte) []byte {
 	return body
 }
 
+func applyOpusFastModeDefault(body []byte) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return body
+	}
+	if gjson.GetBytes(body, "speed").Exists() {
+		return body
+	}
+	model := strings.ToLower(strings.TrimSpace(thinking.ParseSuffix(gjson.GetBytes(body, "model").String()).ModelName))
+	if strings.Contains(model, "opus-4-7") || strings.Contains(model, "opus-4-8") {
+		updated, err := sjson.SetBytes(body, "speed", "fast")
+		if err == nil {
+			return updated
+		}
+	}
+	return body
+}
+
 type compositeReadCloser struct {
 	io.Reader
 	closers []func() error
@@ -1014,6 +1033,9 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 	}
 	if !strings.Contains(baseBetas, "interleaved-thinking") {
 		baseBetas += ",interleaved-thinking-2025-05-14"
+	}
+	if !strings.Contains(baseBetas, "fast-mode-2026-02-01") {
+		baseBetas += ",fast-mode-2026-02-01"
 	}
 
 	// Merge extra betas from request body and request flags.
