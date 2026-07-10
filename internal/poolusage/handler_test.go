@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
 
@@ -91,6 +92,54 @@ func TestClaudeAndCodexAccountsParsedAndMapped(t *testing.T) {
 	}
 	if !codex.OK || codex.Stale || codex.LastError != nil || codex.FetchedAt == nil {
 		t.Fatalf("codex status fields = ok:%t stale:%t lastError:%v fetchedAt:%v", codex.OK, codex.Stale, codex.LastError, codex.FetchedAt)
+	}
+}
+
+func TestUsageSnapshotParsesResetTimes(t *testing.T) {
+	h := &Handler{
+		accounts: map[string]*accountState{
+			"with-resets": {
+				Good: &account{
+					Provider:         "claude",
+					Email:            "with-resets@example.com",
+					FiveHourResetsAt: "2026-07-10T05:00:00Z",
+					SevenDayResetsAt: "2026-07-14T05:00:00Z",
+					Scoped: []scopedLimit{
+						{Name: "Fable", Percent: 11, ResetsAt: "2026-07-10T05:59:00Z"},
+					},
+					OK: true,
+				},
+			},
+			"empty-resets": {
+				Good: &account{
+					Provider:         "claude",
+					Email:            "empty-resets@example.com",
+					FiveHourResetsAt: "",
+					SevenDayResetsAt: "",
+					Scoped: []scopedLimit{
+						{Name: "Fable", Percent: 12, ResetsAt: ""},
+					},
+					OK: true,
+				},
+			},
+		},
+	}
+
+	rows := h.UsageSnapshot()
+	withResets := usageRowByEmail(t, rows, "with-resets@example.com")
+	expectTime(t, withResets.FiveHourResetsAt, "2026-07-10T05:00:00Z")
+	expectTime(t, withResets.SevenDayResetsAt, "2026-07-14T05:00:00Z")
+	expectTime(t, withResets.FableResetsAt, "2026-07-10T05:59:00Z")
+
+	emptyResets := usageRowByEmail(t, rows, "empty-resets@example.com")
+	if emptyResets.FiveHourResetsAt != nil {
+		t.Fatalf("five hour reset = %v, want nil", emptyResets.FiveHourResetsAt)
+	}
+	if emptyResets.SevenDayResetsAt != nil {
+		t.Fatalf("seven day reset = %v, want nil", emptyResets.SevenDayResetsAt)
+	}
+	if emptyResets.FableResetsAt != nil {
+		t.Fatalf("fable reset = %v, want nil", emptyResets.FableResetsAt)
 	}
 }
 
@@ -322,6 +371,27 @@ func expectFloat(t *testing.T, got *float64, want float64) {
 	}
 	if *got != want {
 		t.Fatalf("float = %v, want %v", *got, want)
+	}
+}
+
+func usageRowByEmail(t *testing.T, rows []coreauth.AccountUsage, email string) coreauth.AccountUsage {
+	t.Helper()
+	for _, row := range rows {
+		if row.Email == email {
+			return row
+		}
+	}
+	t.Fatalf("usage row for %q not found in %+v", email, rows)
+	return coreauth.AccountUsage{}
+}
+
+func expectTime(t *testing.T, got *time.Time, want string) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("time = nil, want %s", want)
+	}
+	if got.Format(time.RFC3339) != want {
+		t.Fatalf("time = %s, want %s", got.Format(time.RFC3339), want)
 	}
 }
 

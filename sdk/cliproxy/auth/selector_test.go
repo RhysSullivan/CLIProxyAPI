@@ -1464,6 +1464,11 @@ func ptrFloat(v float64) *float64 {
 	return &v
 }
 
+func ptrTime(year int, month time.Month, day, hour, minute int) *time.Time {
+	t := time.Date(year, month, day, hour, minute, 0, 0, time.UTC)
+	return &t
+}
+
 func claudeTestAuth(id, email string) *Auth {
 	return &Auth{
 		ID:       id,
@@ -1493,6 +1498,19 @@ func TestUsageAwareSelectorPick(t *testing.T) {
 				{Provider: "claude", Email: "low@example.com", FableAvailable: true, FablePercent: ptrFloat(20), OK: true},
 			},
 			want: "auth-low",
+		},
+		{
+			name:  "fable model picks earlier reset before lower percent",
+			model: "claude-fable-5",
+			auths: []*Auth{
+				claudeTestAuth("auth-soon", "soon@example.com"),
+				claudeTestAuth("auth-late", "late@example.com"),
+			},
+			rows: []AccountUsage{
+				{Provider: "claude", Email: "soon@example.com", FableAvailable: true, FablePercent: ptrFloat(90), FableResetsAt: ptrTime(2026, time.July, 10, 5, 45), OK: true},
+				{Provider: "claude", Email: "late@example.com", FableAvailable: true, FablePercent: ptrFloat(10), FableResetsAt: ptrTime(2026, time.July, 14, 5, 45), OK: true},
+			},
+			want: "auth-soon",
 		},
 		{
 			name:  "fable model avoids ok incapable account when capable exists",
@@ -1543,6 +1561,45 @@ func TestUsageAwareSelectorPick(t *testing.T) {
 				{Provider: "claude", Email: "high@example.com", FableAvailable: true, FablePercent: ptrFloat(85), OK: true},
 			},
 			want: "auth-high",
+		},
+		{
+			name:  "opus model among capable picks earlier seven day reset before percent",
+			model: "claude-opus-4-5",
+			auths: []*Auth{
+				claudeTestAuth("auth-soon", "soon@example.com"),
+				claudeTestAuth("auth-late", "late@example.com"),
+			},
+			rows: []AccountUsage{
+				{Provider: "claude", Email: "soon@example.com", FableAvailable: true, FablePercent: ptrFloat(10), SevenDayResetsAt: ptrTime(2026, time.July, 10, 5, 45), OK: true},
+				{Provider: "claude", Email: "late@example.com", FableAvailable: true, FablePercent: ptrFloat(90), SevenDayResetsAt: ptrTime(2026, time.July, 14, 5, 45), OK: true},
+			},
+			want: "auth-soon",
+		},
+		{
+			name:  "opus incapable category beats capable earlier reset",
+			model: "claude-opus-4-5",
+			auths: []*Auth{
+				claudeTestAuth("auth-incapable", "incapable@example.com"),
+				claudeTestAuth("auth-capable", "capable@example.com"),
+			},
+			rows: []AccountUsage{
+				{Provider: "claude", Email: "incapable@example.com", FableAvailable: false, SevenDayResetsAt: ptrTime(2026, time.July, 14, 5, 45), OK: true},
+				{Provider: "claude", Email: "capable@example.com", FableAvailable: true, FablePercent: ptrFloat(99), SevenDayResetsAt: ptrTime(2026, time.July, 10, 5, 45), OK: true},
+			},
+			want: "auth-incapable",
+		},
+		{
+			name:  "nil reset loses to known reset within category",
+			model: "claude-fable-5",
+			auths: []*Auth{
+				claudeTestAuth("auth-unknown", "unknown@example.com"),
+				claudeTestAuth("auth-known", "known@example.com"),
+			},
+			rows: []AccountUsage{
+				{Provider: "claude", Email: "unknown@example.com", FableAvailable: true, FablePercent: ptrFloat(10), OK: true},
+				{Provider: "claude", Email: "known@example.com", FableAvailable: true, FablePercent: ptrFloat(90), FableResetsAt: ptrTime(2026, time.July, 10, 5, 45), OK: true},
+			},
+			want: "auth-known",
 		},
 		{
 			name:  "tie on fable percent lower five hour wins",
@@ -1628,6 +1685,32 @@ func TestUsageAwareSelectorPick_ExactTieRoundRobins(t *testing.T) {
 	}
 	if first.ID == second.ID {
 		t.Fatalf("sequential tied picks both returned %q, want round-robin across tied auths", first.ID)
+	}
+}
+
+func TestUsageAwareSelectorPick_ResetBucketTieRoundRobins(t *testing.T) {
+	selector := &UsageAwareSelector{}
+	selector.SetUsageSnapshotProvider(usageSnapshotProviderFunc(func() []AccountUsage {
+		return []AccountUsage{
+			{Provider: "claude", Email: "a@example.com", FableAvailable: true, FablePercent: ptrFloat(30), FableResetsAt: ptrTime(2026, time.July, 10, 5, 1), OK: true},
+			{Provider: "claude", Email: "b@example.com", FableAvailable: true, FablePercent: ptrFloat(30), FableResetsAt: ptrTime(2026, time.July, 10, 5, 6), OK: true},
+		}
+	}))
+	auths := []*Auth{
+		claudeTestAuth("auth-a", "a@example.com"),
+		claudeTestAuth("auth-b", "b@example.com"),
+	}
+
+	first, err := selector.Pick(context.Background(), "mixed", "claude-fable-5", cliproxyexecutor.Options{}, auths)
+	if err != nil {
+		t.Fatalf("first Pick() error = %v", err)
+	}
+	second, err := selector.Pick(context.Background(), "mixed", "claude-fable-5", cliproxyexecutor.Options{}, auths)
+	if err != nil {
+		t.Fatalf("second Pick() error = %v", err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("sequential same-bucket picks both returned %q, want round-robin across tied auths", first.ID)
 	}
 }
 

@@ -245,25 +245,42 @@ func (h *Handler) UsageSnapshot() []coreauth.AccountUsage {
 	for _, account := range accounts {
 		fableAvailable := false
 		var fablePercent *float64
+		var fableResetsAt *time.Time
 		for _, scoped := range account.Scoped {
 			if strings.EqualFold(strings.TrimSpace(scoped.Name), "fable") {
 				fableAvailable = true
 				percent := scoped.Percent
 				fablePercent = &percent
+				fableResetsAt = parseUsageResetTime(scoped.ResetsAt)
 				break
 			}
 		}
 		out = append(out, coreauth.AccountUsage{
-			Provider:       account.Provider,
-			Email:          account.Email,
-			FableAvailable: fableAvailable,
-			FablePercent:   fablePercent,
-			FiveHourUtil:   account.FiveHourUtil,
-			SevenDayUtil:   account.SevenDayUtil,
-			OK:             account.OK,
+			Provider:         account.Provider,
+			Email:            account.Email,
+			FableAvailable:   fableAvailable,
+			FablePercent:     fablePercent,
+			FableResetsAt:    fableResetsAt,
+			FiveHourUtil:     account.FiveHourUtil,
+			FiveHourResetsAt: parseUsageResetTime(account.FiveHourResetsAt),
+			SevenDayUtil:     account.SevenDayUtil,
+			SevenDayResetsAt: parseUsageResetTime(account.SevenDayResetsAt),
+			OK:               account.OK,
 		})
 	}
 	return out
+}
+
+func parseUsageResetTime(raw string) *time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 func (s *accountState) snapshot() account {
