@@ -24,6 +24,13 @@ var modelsURLs = []string{
 	"https://models.router-for.me/models.json",
 }
 
+// Models released before the shared remote catalog updates remain available from
+// this binary's verified embedded catalog. Remote definitions win as soon as
+// they exist, so this is only a narrow launch-window bridge.
+var pinnedEmbeddedClaudeModelIDs = map[string]struct{}{
+	"claude-opus-5": {},
+}
+
 //go:embed models/models.json
 var embeddedModelsJSON []byte
 
@@ -140,6 +147,40 @@ func tryRefreshModels(ctx context.Context, label string) {
 
 // fetchModelsFromRemote tries all remote URLs and returns the parsed model catalog
 // along with the URL it was fetched from. Returns (nil, "") if all fetches fail.
+func preservePinnedEmbeddedClaudeModels(remote *staticModelsJSON) error {
+	var embedded staticModelsJSON
+	if err := json.Unmarshal(embeddedModelsJSON, &embedded); err != nil {
+		return fmt.Errorf("parse embedded catalog: %w", err)
+	}
+	mergePinnedClaudeModels(remote, &embedded, pinnedEmbeddedClaudeModelIDs)
+	return nil
+}
+
+func mergePinnedClaudeModels(remote, embedded *staticModelsJSON, pinned map[string]struct{}) {
+	if remote == nil || embedded == nil || len(pinned) == 0 {
+		return
+	}
+	remoteIDs := make(map[string]struct{}, len(remote.Claude))
+	for _, model := range remote.Claude {
+		if model != nil {
+			remoteIDs[model.ID] = struct{}{}
+		}
+	}
+	for _, model := range embedded.Claude {
+		if model == nil {
+			continue
+		}
+		if _, keep := pinned[model.ID]; !keep {
+			continue
+		}
+		if _, exists := remoteIDs[model.ID]; exists {
+			continue
+		}
+		remote.Claude = append(remote.Claude, cloneModelInfo(model))
+		remoteIDs[model.ID] = struct{}{}
+	}
+}
+
 func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
 	client := &http.Client{Timeout: modelsFetchTimeout}
 	for _, url := range modelsURLs {
@@ -181,6 +222,10 @@ func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
 		}
 		if err := validateModelsCatalog(&parsed); err != nil {
 			log.Warnf("models validate failed from %s: %v", url, err)
+			continue
+		}
+		if err := preservePinnedEmbeddedClaudeModels(&parsed); err != nil {
+			log.Warnf("models embedded launch-window merge failed for %s: %v", url, err)
 			continue
 		}
 
