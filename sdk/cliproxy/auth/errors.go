@@ -1,5 +1,11 @@
 package auth
 
+const requestScopedErrorCode = "request_scoped"
+
+// connectionLifecycleErrorCode marks transport/session lifecycle failures that
+// must skip credential cooldown without being treated as request-scoped faults.
+const connectionLifecycleErrorCode = "connection_lifecycle"
+
 // Error describes an authentication related failure in a provider agnostic format.
 type Error struct {
 	// Code is a short machine readable identifier.
@@ -29,4 +35,10 @@ func (e *Error) StatusCode() int {
 		return 0
 	}
 	return e.HTTPStatus
+}
+
+// IsRequestScoped reports whether the failure is tied to the current request
+// rather than the selected credential.
+func (e *Error) IsRequestScoped() bool {
+	return e != nil && e.Code == requestScopedErrorCode
 }

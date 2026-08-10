@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -66,24 +67,37 @@ func (r *Registry) TranslateRequest(from, to Format, model string, rawJSON []byt
 
 	body := rawJSON
 	if fn != nil {
+		summaryConfig := thinking.ExtractSummaryConfig(rawJSON, from.String())
 		body = fn(model, body, stream)
-	} else {
-		if model != "" && gjson.GetBytes(body, "model").String() != model {
-			if updated, err := sjson.SetBytes(body, "model", model); err != nil {
-				log.Warnf("translator: failed to normalize model in request fallback: %v", err)
-			} else {
-				body = updated
-			}
+		body = thinking.ApplySummaryConfigForModel(body, to.String(), model, summaryConfig)
+		if hooks != nil {
+			// Request normalizers run after native translation and own the final
+			// provider payload, including any summary field they remove.
+			body = hooks.NormalizeRequest(context.Background(), from, to, model, body, stream)
 		}
+		return body
 	}
 
-	if hooks != nil {
-		body = hooks.NormalizeRequest(context.Background(), from, to, model, body, stream)
-		if fn == nil {
-			if translated, ok := hooks.TranslateRequest(context.Background(), from, to, model, body, stream); ok {
-				body = translated
-			}
+	if model != "" && gjson.GetBytes(body, "model").String() != model {
+		if updated, err := sjson.SetBytes(body, "model", model); err != nil {
+			log.Warnf("translator: failed to normalize model in request fallback: %v", err)
+		} else {
+			body = updated
 		}
+	}
+	if hooks == nil {
+		// No translation occurred. Preserve the documented fallback shape instead
+		// of mixing target-protocol summary fields into the source payload.
+		return body
+	}
+
+	// Plugin request normalizers canonicalize the source before a plugin request
+	// translator gets a chance to handle a missing native route. Extract summary
+	// intent from that normalized source so a normalizer can remove or rewrite it.
+	body = hooks.NormalizeRequest(context.Background(), from, to, model, body, stream)
+	summaryConfig := thinking.ExtractSummaryConfig(body, from.String())
+	if translated, ok := hooks.TranslateRequest(context.Background(), from, to, model, body, stream); ok {
+		body = thinking.ApplySummaryConfigForModel(translated, to.String(), model, summaryConfig)
 	}
 	return body
 }
@@ -107,7 +121,33 @@ func (r *Registry) HasResponseTransformer(from, to Format) bool {
 	defer r.mu.RUnlock()
 
 	if byTarget, ok := r.responses[from]; ok {
-		if _, isOk := byTarget[to]; isOk {
+		if fn, isOk := byTarget[to]; isOk && hasAnyResponseTransform(fn) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasStreamResponseTransformer indicates whether a streaming response translator exists.
+func (r *Registry) HasStreamResponseTransformer(from, to Format) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if byTarget, ok := r.responses[from]; ok {
+		if fn, isOk := byTarget[to]; isOk && fn.Stream != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// HasNonStreamResponseTransformer indicates whether a non-streaming response translator exists.
+func (r *Registry) HasNonStreamResponseTransformer(from, to Format) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if byTarget, ok := r.responses[from]; ok {
+		if fn, isOk := byTarget[to]; isOk && fn.NonStream != nil {
 			return true
 		}
 	}
@@ -117,9 +157,9 @@ func (r *Registry) HasResponseTransformer(from, to Format) bool {
 // TranslateStream applies the registered streaming response translator.
 func (r *Registry) TranslateStream(ctx context.Context, from, to Format, model string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) [][]byte {
 	r.mu.RLock()
-	var fn ResponseTransform
+	var stream ResponseStreamTransform
 	if byTarget, ok := r.responses[to]; ok {
-		fn = byTarget[from]
+		stream = byTarget[from].Stream
 	}
 	hooks := r.hooks
 	r.mu.RUnlock()
@@ -130,14 +170,16 @@ func (r *Registry) TranslateStream(ctx context.Context, from, to Format, model s
 	}
 
 	var outputs [][]byte
-	if fn.Stream != nil {
-		outputs = fn.Stream(ctx, model, originalRequestRawJSON, requestRawJSON, body, param)
+	usedNativeTransform := false
+	if stream != nil {
+		usedNativeTransform = true
+		outputs = stream(ctx, model, originalRequestRawJSON, requestRawJSON, body, param)
 	} else if hooks != nil {
 		if translated, ok := hooks.TranslateResponse(ctx, from, to, model, originalRequestRawJSON, requestRawJSON, body, true); ok {
 			outputs = [][]byte{translated}
 		}
 	}
-	if outputs == nil {
+	if outputs == nil && !usedNativeTransform {
 		outputs = [][]byte{body}
 	}
 	if hooks != nil {
@@ -220,6 +262,16 @@ func HasResponseTransformer(from, to Format) bool {
 	return defaultRegistry.HasResponseTransformer(from, to)
 }
 
+// HasStreamResponseTransformer inspects the default registry for a streaming response translator.
+func HasStreamResponseTransformer(from, to Format) bool {
+	return defaultRegistry.HasStreamResponseTransformer(from, to)
+}
+
+// HasNonStreamResponseTransformer inspects the default registry for a non-streaming response translator.
+func HasNonStreamResponseTransformer(from, to Format) bool {
+	return defaultRegistry.HasNonStreamResponseTransformer(from, to)
+}
+
 // TranslateStream is a helper on the default registry.
 func TranslateStream(ctx context.Context, from, to Format, model string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) [][]byte {
 	return defaultRegistry.TranslateStream(ctx, from, to, model, originalRequestRawJSON, requestRawJSON, rawJSON, param)
@@ -233,4 +285,8 @@ func TranslateNonStream(ctx context.Context, from, to Format, model string, orig
 // TranslateTokenCount is a helper on the default registry.
 func TranslateTokenCount(ctx context.Context, from, to Format, count int64, rawJSON []byte) []byte {
 	return defaultRegistry.TranslateTokenCount(ctx, from, to, count, rawJSON)
+}
+
+func hasAnyResponseTransform(fn ResponseTransform) bool {
+	return fn.Stream != nil || fn.NonStream != nil || fn.TokenCount != nil
 }
