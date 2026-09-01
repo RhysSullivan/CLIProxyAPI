@@ -28,7 +28,7 @@ var modelsURLs = []string{
 // this binary's verified embedded catalog. Remote definitions win as soon as
 // they exist, so this is only a narrow launch-window bridge.
 var pinnedEmbeddedClaudeModelIDs = map[string]struct{}{
-	"claude-opus-5": {},
+	"claude-fable-5-1": {},
 }
 
 //go:embed models/models.json

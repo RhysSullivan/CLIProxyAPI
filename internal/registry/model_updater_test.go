@@ -1,6 +1,9 @@
 package registry
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestMergePinnedClaudeModelsPreservesLaunchModelUntilRemotePublishesIt(t *testing.T) {
 	remote := &staticModelsJSON{Claude: []*ModelInfo{{ID: "claude-opus-4-8", DisplayName: "Remote 4.8"}}}
@@ -28,5 +31,27 @@ func TestMergePinnedClaudeModelsPrefersRemoteDefinition(t *testing.T) {
 
 	if len(remote.Claude) != 1 || remote.Claude[0].DisplayName != "Remote Opus 5" {
 		t.Fatalf("remote definition was not preserved: %+v", remote.Claude)
+	}
+}
+
+// TestPinnedEmbeddedClaudeModelsExistInEmbeddedCatalog guards the launch-window
+// bridge against a pin that names a model the embedded catalog does not define.
+// Such a pin silently preserves nothing, so the model disappears on the first
+// remote refresh.
+func TestPinnedEmbeddedClaudeModelsExistInEmbeddedCatalog(t *testing.T) {
+	var embedded staticModelsJSON
+	if err := json.Unmarshal(embeddedModelsJSON, &embedded); err != nil {
+		t.Fatalf("parse embedded catalog: %v", err)
+	}
+	present := make(map[string]struct{}, len(embedded.Claude))
+	for _, model := range embedded.Claude {
+		if model != nil {
+			present[model.ID] = struct{}{}
+		}
+	}
+	for id := range pinnedEmbeddedClaudeModelIDs {
+		if _, ok := present[id]; !ok {
+			t.Errorf("pinned model %q is absent from the embedded catalog; add it to models/models.json or drop the pin", id)
+		}
 	}
 }
