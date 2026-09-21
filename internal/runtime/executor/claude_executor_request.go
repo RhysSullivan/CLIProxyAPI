@@ -1974,6 +1974,9 @@ type claudeMCPAliasResolver struct {
 	exact   map[string]string
 	aliases []claudeMCPAliasEntry
 	servers map[string]struct{}
+	// callerTools maps the tool component of an untouched caller MCP name to the
+	// full names carrying it, so a name whose server drifted can still be found.
+	callerTools map[string][]string
 }
 
 type claudeMCPAliasRestoreError struct {
@@ -1990,14 +1993,20 @@ func (claudeMCPAliasRestoreError) IsRequestScoped() bool {
 
 func newClaudeMCPAliasResolver(reverseMap map[string]string) claudeMCPAliasResolver {
 	resolver := claudeMCPAliasResolver{
-		exact:   reverseMap,
-		aliases: make([]claudeMCPAliasEntry, 0, len(reverseMap)),
-		servers: make(map[string]struct{}),
+		exact:       reverseMap,
+		aliases:     make([]claudeMCPAliasEntry, 0, len(reverseMap)),
+		servers:     make(map[string]struct{}),
+		callerTools: make(map[string][]string),
 	}
 	for alias, original := range reverseMap {
 		if alias == original {
 			// Caller-owned MCP tool recorded for exact passthrough only. It must not
-			// register a virtual server or take part in fuzzy alias recovery.
+			// register a virtual server or take part in alias recovery, but its tool
+			// component is indexed: the model routinely keeps that component and
+			// swaps in the virtual server shared by every proxied tool.
+			if tool, okTool := claudeMCPToolComponent(original); okTool {
+				resolver.callerTools[tool] = append(resolver.callerTools[tool], original)
+			}
 			continue
 		}
 		parts, ok := parseClaudeMCPAlias(alias)
@@ -2031,6 +2040,19 @@ func parseClaudeMCPAlias(name string) (claudeMCPAliasParts, bool) {
 		return claudeMCPAliasParts{}, false
 	}
 	return claudeMCPAliasParts{server: server, toolID: toolID, semantic: semantic}, true
+}
+
+// claudeMCPToolComponent returns everything after the "mcp__<server>__" prefix.
+func claudeMCPToolComponent(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, "mcp__")
+	if !ok {
+		return "", false
+	}
+	_, tool, ok := strings.Cut(rest, "__")
+	if !ok || tool == "" {
+		return "", false
+	}
+	return tool, true
 }
 
 func claudeMCPAliasServer(name string) string {
@@ -2159,7 +2181,21 @@ func (resolver claudeMCPAliasResolver) resolve(name string) (string, bool, error
 		return "", false, claudeMCPAliasRestoreError{fmt.Errorf("cannot restore Claude OAuth MCP tool alias %q: semantic suffix matches multiple declared tools", name)}
 	}
 
-	return "", false, claudeMCPAliasRestoreError{fmt.Errorf("cannot restore Claude OAuth MCP tool alias %q: no unique request-local match", name)}
+	// A caller MCP tool re-issued under the virtual server keeps its own tool
+	// component, which is unique often enough to restore the call outright.
+	if tool, okTool := claudeMCPToolComponent(normalizedName); okTool {
+		if candidates := resolver.callerTools[tool]; len(candidates) == 1 {
+			log.Debugf("claude oauth mcp alias: recovered caller MCP tool %q as %q via tool component", name, candidates[0])
+			return candidates[0], true, nil
+		}
+	}
+
+	// Nothing in this request matches, so the model named a tool that does not
+	// exist. Forward the name untouched: the client answers an unknown tool with
+	// an ordinary tool error the model recovers from, whereas failing here ends
+	// the stream and every retry of it with a 500.
+	log.Debugf("claude oauth mcp alias: no request-local match for %q, forwarding it unchanged", name)
+	return "", false, nil
 }
 
 // reverseRemapOAuthToolNames reverses the tool name mapping for non-stream responses
