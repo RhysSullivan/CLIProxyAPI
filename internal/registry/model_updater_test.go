@@ -84,3 +84,73 @@ func TestDetectChangedProviders_KimiAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestPinnedEmbeddedCodexModelsExistInEveryEmbeddedCodexTier(t *testing.T) {
+	var embedded staticModelsJSON
+	if err := json.Unmarshal(embeddedModelsJSON, &embedded); err != nil {
+		t.Fatalf("parse embedded catalog: %v", err)
+	}
+	tiers := map[string][]*ModelInfo{
+		"codex-free": embedded.CodexFree,
+		"codex-team": embedded.CodexTeam,
+		"codex-plus": embedded.CodexPlus,
+		"codex-pro":  embedded.CodexPro,
+	}
+	for tier, models := range tiers {
+		present := make(map[string]struct{}, len(models))
+		for _, model := range models {
+			present[model.ID] = struct{}{}
+		}
+		for id := range pinnedEmbeddedCodexModelIDs {
+			if _, ok := present[id]; !ok {
+				t.Errorf("pinned Codex model %q is absent from embedded %s", id, tier)
+			}
+		}
+	}
+
+	remote := &staticModelsJSON{CodexPro: []*ModelInfo{{ID: "gpt-5.5"}}}
+	mergePinnedCodexModels(remote, &embedded, pinnedEmbeddedCodexModelIDs)
+	if len(remote.CodexPro) != 1+len(pinnedEmbeddedCodexModelIDs) {
+		t.Fatalf("merged codex-pro = %d models, want remote plus pinned", len(remote.CodexPro))
+	}
+}
+
+func TestMergePinnedEmbeddedCodexClientModelsKeepsPinnedSlugs(t *testing.T) {
+	remote := []byte(`{"models":[` + mustCodexClientModelJSON(t, "gpt-5.5") + `]}`)
+	merged, err := mergePinnedEmbeddedCodexClientModels(remote, embeddedCodexClientModelsJSON, pinnedEmbeddedCodexModelIDs)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	var payload codexClientModelsPayload
+	if err := json.Unmarshal(merged, &payload); err != nil {
+		t.Fatalf("decode merged: %v", err)
+	}
+	slugs := make(map[string]struct{}, len(payload.Models))
+	for _, model := range payload.Models {
+		slugs[model["slug"].(string)] = struct{}{}
+	}
+	for id := range pinnedEmbeddedCodexModelIDs {
+		if _, ok := slugs[id]; !ok {
+			t.Errorf("pinned client model %q missing after merge", id)
+		}
+	}
+}
+
+func mustCodexClientModelJSON(t *testing.T, slug string) string {
+	t.Helper()
+	var payload codexClientModelsPayload
+	if err := json.Unmarshal(embeddedCodexClientModelsJSON, &payload); err != nil {
+		t.Fatalf("decode embedded client catalog: %v", err)
+	}
+	for _, model := range payload.Models {
+		if model["slug"] == slug {
+			data, err := json.Marshal(model)
+			if err != nil {
+				t.Fatalf("encode %s: %v", slug, err)
+			}
+			return string(data)
+		}
+	}
+	t.Fatalf("embedded client catalog lacks %s", slug)
+	return ""
+}

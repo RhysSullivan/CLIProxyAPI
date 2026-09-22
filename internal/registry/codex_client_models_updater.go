@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -48,6 +50,12 @@ func tryRefreshCodexClientModels(ctx context.Context, label string) {
 	data, sourceURL := fetchCodexClientModelsFromRemote(ctx)
 	if data == nil {
 		log.Warnf("%s: fetch failed from all URLs, keeping current data", label)
+		return
+	}
+
+	data, err := mergePinnedEmbeddedCodexClientModels(data, embeddedCodexClientModelsJSON, pinnedEmbeddedCodexModelIDs)
+	if err != nil {
+		log.Warnf("%s: embedded pin merge failed for %s, keeping current data: %v", label, sourceURL, err)
 		return
 	}
 
@@ -111,4 +119,49 @@ func fetchCodexClientModelsFromRemote(ctx context.Context) ([]byte, string) {
 		return data, sourceURL
 	}
 	return nil, ""
+}
+
+// mergePinnedEmbeddedCodexClientModels appends pinned embedded client models
+// that the remote catalog lacks. Remote definitions win once they exist.
+func mergePinnedEmbeddedCodexClientModels(remote, embedded []byte, pinned map[string]struct{}) ([]byte, error) {
+	if len(pinned) == 0 {
+		return remote, nil
+	}
+	var remotePayload, embeddedPayload codexClientModelsPayload
+	if err := json.Unmarshal(remote, &remotePayload); err != nil {
+		return nil, fmt.Errorf("decode remote catalog: %w", err)
+	}
+	if err := json.Unmarshal(embedded, &embeddedPayload); err != nil {
+		return nil, fmt.Errorf("decode embedded catalog: %w", err)
+	}
+	present := make(map[string]struct{}, len(remotePayload.Models))
+	for _, model := range remotePayload.Models {
+		if slug, ok := model["slug"].(string); ok {
+			present[slug] = struct{}{}
+		}
+	}
+	added := false
+	for _, model := range embeddedPayload.Models {
+		slug, _ := model["slug"].(string)
+		if _, keep := pinned[slug]; !keep {
+			continue
+		}
+		if _, exists := present[slug]; exists {
+			continue
+		}
+		remotePayload.Models = append(remotePayload.Models, model)
+		present[slug] = struct{}{}
+		added = true
+	}
+	if !added {
+		return remote, nil
+	}
+	merged, err := json.Marshal(remotePayload)
+	if err != nil {
+		return nil, fmt.Errorf("encode merged catalog: %w", err)
+	}
+	if err := ValidateCodexClientModelsJSON(merged); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }

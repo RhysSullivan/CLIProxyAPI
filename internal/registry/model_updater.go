@@ -33,6 +33,14 @@ var pinnedEmbeddedClaudeModelIDs = map[string]struct{}{
 	"claude-opus-5-5":  {},
 }
 
+// Codex models that are gated by account entitlement (Trusted Access for Cyber)
+// and absent from the shared remote catalog. They stay pinned across every
+// Codex tier until the remote catalog publishes them.
+var pinnedEmbeddedCodexModelIDs = map[string]struct{}{
+	"gpt-daybreak-blue-latest": {},
+	"gpt-daybreak-red-latest":  {},
+}
+
 //go:embed models/models.json
 var embeddedModelsJSON []byte
 
@@ -153,26 +161,45 @@ func tryRefreshModels(ctx context.Context, label string) {
 
 // fetchModelsFromRemote tries all remote URLs and returns the parsed model catalog
 // along with the URL it was fetched from. Returns (nil, "") if all fetches fail.
-func preservePinnedEmbeddedClaudeModels(remote *staticModelsJSON) error {
+func preservePinnedEmbeddedModels(remote *staticModelsJSON) error {
 	var embedded staticModelsJSON
 	if err := json.Unmarshal(embeddedModelsJSON, &embedded); err != nil {
 		return fmt.Errorf("parse embedded catalog: %w", err)
 	}
 	mergePinnedClaudeModels(remote, &embedded, pinnedEmbeddedClaudeModelIDs)
+	mergePinnedCodexModels(remote, &embedded, pinnedEmbeddedCodexModelIDs)
 	return nil
 }
 
 func mergePinnedClaudeModels(remote, embedded *staticModelsJSON, pinned map[string]struct{}) {
-	if remote == nil || embedded == nil || len(pinned) == 0 {
+	if remote == nil || embedded == nil {
 		return
 	}
-	remoteIDs := make(map[string]struct{}, len(remote.Claude))
-	for _, model := range remote.Claude {
+	remote.Claude = mergePinnedModels(remote.Claude, embedded.Claude, pinned)
+}
+
+func mergePinnedCodexModels(remote, embedded *staticModelsJSON, pinned map[string]struct{}) {
+	if remote == nil || embedded == nil {
+		return
+	}
+	remote.CodexFree = mergePinnedModels(remote.CodexFree, embedded.CodexFree, pinned)
+	remote.CodexTeam = mergePinnedModels(remote.CodexTeam, embedded.CodexTeam, pinned)
+	remote.CodexPlus = mergePinnedModels(remote.CodexPlus, embedded.CodexPlus, pinned)
+	remote.CodexPro = mergePinnedModels(remote.CodexPro, embedded.CodexPro, pinned)
+}
+
+// mergePinnedModels appends pinned embedded models that the remote list lacks.
+func mergePinnedModels(remote, embedded []*ModelInfo, pinned map[string]struct{}) []*ModelInfo {
+	if len(pinned) == 0 {
+		return remote
+	}
+	remoteIDs := make(map[string]struct{}, len(remote))
+	for _, model := range remote {
 		if model != nil {
 			remoteIDs[model.ID] = struct{}{}
 		}
 	}
-	for _, model := range embedded.Claude {
+	for _, model := range embedded {
 		if model == nil {
 			continue
 		}
@@ -182,9 +209,10 @@ func mergePinnedClaudeModels(remote, embedded *staticModelsJSON, pinned map[stri
 		if _, exists := remoteIDs[model.ID]; exists {
 			continue
 		}
-		remote.Claude = append(remote.Claude, cloneModelInfo(model))
+		remote = append(remote, cloneModelInfo(model))
 		remoteIDs[model.ID] = struct{}{}
 	}
+	return remote
 }
 
 func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
@@ -230,7 +258,7 @@ func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
 			log.Warnf("models validate failed from %s: %v", url, err)
 			continue
 		}
-		if err := preservePinnedEmbeddedClaudeModels(&parsed); err != nil {
+		if err := preservePinnedEmbeddedModels(&parsed); err != nil {
 			log.Warnf("models embedded launch-window merge failed for %s: %v", url, err)
 			continue
 		}
