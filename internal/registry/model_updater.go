@@ -30,6 +30,7 @@ var modelsURLs = []string{
 // they exist, so this is only a narrow launch-window bridge.
 var pinnedEmbeddedClaudeModelIDs = map[string]struct{}{
 	"claude-fable-5-1": {},
+	"claude-opus-5-5":  {},
 }
 
 //go:embed models/models.json
