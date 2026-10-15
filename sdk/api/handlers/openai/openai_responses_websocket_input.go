@@ -22,13 +22,15 @@ import (
 // responsesLocalInterrupt cancels an in-flight HTTP turn. A websocket upstream
 // does not use it; that interrupt is written to the existing socket instead.
 type responsesLocalInterrupt struct {
-	mu     sync.Mutex
-	active bool
-	frames chan []byte
+	mu          sync.Mutex
+	active      bool
+	frames      chan []byte
+	responseID  string
+	terminalIDs map[string]struct{}
 }
 
 func newResponsesLocalInterrupt() *responsesLocalInterrupt {
-	return &responsesLocalInterrupt{frames: make(chan []byte, 1)}
+	return &responsesLocalInterrupt{frames: make(chan []byte, 1), terminalIDs: make(map[string]struct{})}
 }
 
 func (s *responsesLocalInterrupt) begin() {
@@ -37,6 +39,7 @@ func (s *responsesLocalInterrupt) begin() {
 	}
 	s.mu.Lock()
 	s.active = true
+	s.responseID = ""
 	s.mu.Unlock()
 }
 
@@ -59,7 +62,7 @@ func (s *responsesLocalInterrupt) deliver(payload []byte) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.active {
+	if !s.active || s.responseID == "" || gjson.GetBytes(payload, "response_id").String() != s.responseID {
 		return false
 	}
 	select {
@@ -67,6 +70,58 @@ func (s *responsesLocalInterrupt) deliver(payload []byte) bool {
 	default:
 	}
 	return true
+}
+
+// Record lifecycle before publishing events to the downstream reader. HTTP
+// fallback has no upstream websocket session in which to remember terminal IDs.
+func (s *responsesLocalInterrupt) observe(payload []byte) {
+	if s == nil {
+		return
+	}
+	event := gjson.GetBytes(payload, "type").String()
+	id := gjson.GetBytes(payload, "response.id").String()
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event == "response.created" {
+		s.responseID = id
+		return
+	}
+	if isResponsesWebsocketCompletionEvent(event) || event == "response.incomplete" || event == "response.failed" {
+		s.finishLocked(id)
+	}
+}
+
+func (s *responsesLocalInterrupt) finishLocked(id string) {
+	if _, exists := s.terminalIDs[id]; exists {
+		return
+	}
+	s.terminalIDs[id] = struct{}{}
+}
+
+func (s *responsesLocalInterrupt) finish(payload []byte) {
+	if s == nil {
+		return
+	}
+	id := gjson.GetBytes(payload, "response_id").String()
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finishLocked(id)
+}
+
+func (s *responsesLocalInterrupt) alreadyTerminal(payload []byte) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, terminal := s.terminalIDs[gjson.GetBytes(payload, "response_id").String()]
+	return terminal
 }
 
 func (s *responsesLocalInterrupt) framesChan() <-chan []byte {
@@ -98,6 +153,10 @@ func readResponsesWebsocketInput(ctx context.Context, cancel context.CancelCause
 			// response_id, mode, and extension fields must reach upstream unchanged.
 			if json.Valid(payload) && gjson.GetBytes(payload, "type").String() == "response.interrupt" {
 				appendResponsesInterruptDiagnostic(timeline, payload, "")
+				if local.alreadyTerminal(payload) {
+					appendResponsesInterruptDiagnostic(timeline, payload, "handled")
+					continue
+				}
 				errInterrupt := interrupt(payload)
 				switch {
 				case errInterrupt == nil:
