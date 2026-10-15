@@ -21,6 +21,22 @@ var modelsURLs = []string{
 	"https://models.router-for.me/models.json",
 }
 
+// Models released before the shared remote catalog updates remain available from
+// this binary's verified embedded catalog. Remote definitions win as soon as
+// they exist, so this is only a narrow launch-window bridge.
+var pinnedEmbeddedClaudeModelIDs = map[string]struct{}{
+	"claude-fable-5-1": {},
+	"claude-opus-5-5":  {},
+}
+
+// Codex models that are gated by account entitlement (Trusted Access for Cyber)
+// and absent from the shared remote catalog. They stay pinned across every
+// Codex tier until the remote catalog publishes them.
+var pinnedEmbeddedCodexModelIDs = map[string]struct{}{
+	"gpt-daybreak-blue-latest": {},
+	"gpt-daybreak-red-latest":  {},
+}
+
 //go:embed models/models.json
 var embeddedModelsJSON []byte
 
@@ -71,6 +87,60 @@ func init() {
 // Safe to call multiple times; only one updater will run.
 func StartModelsUpdater(ctx context.Context) {
 	generalCatalogUpdater.configure(ctx, "")
+}
+
+func preservePinnedEmbeddedModels(remote *staticModelsJSON) error {
+	var embedded staticModelsJSON
+	if err := json.Unmarshal(embeddedModelsJSON, &embedded); err != nil {
+		return fmt.Errorf("parse embedded catalog: %w", err)
+	}
+	mergePinnedClaudeModels(remote, &embedded, pinnedEmbeddedClaudeModelIDs)
+	mergePinnedCodexModels(remote, &embedded, pinnedEmbeddedCodexModelIDs)
+	return nil
+}
+
+func mergePinnedClaudeModels(remote, embedded *staticModelsJSON, pinned map[string]struct{}) {
+	if remote == nil || embedded == nil {
+		return
+	}
+	remote.Claude = mergePinnedModels(remote.Claude, embedded.Claude, pinned)
+}
+
+func mergePinnedCodexModels(remote, embedded *staticModelsJSON, pinned map[string]struct{}) {
+	if remote == nil || embedded == nil {
+		return
+	}
+	remote.CodexFree = mergePinnedModels(remote.CodexFree, embedded.CodexFree, pinned)
+	remote.CodexTeam = mergePinnedModels(remote.CodexTeam, embedded.CodexTeam, pinned)
+	remote.CodexPlus = mergePinnedModels(remote.CodexPlus, embedded.CodexPlus, pinned)
+	remote.CodexPro = mergePinnedModels(remote.CodexPro, embedded.CodexPro, pinned)
+}
+
+// mergePinnedModels appends pinned embedded models that the remote list lacks.
+func mergePinnedModels(remote, embedded []*ModelInfo, pinned map[string]struct{}) []*ModelInfo {
+	if len(pinned) == 0 {
+		return remote
+	}
+	remoteIDs := make(map[string]struct{}, len(remote))
+	for _, model := range remote {
+		if model != nil {
+			remoteIDs[model.ID] = struct{}{}
+		}
+	}
+	for _, model := range embedded {
+		if model == nil {
+			continue
+		}
+		if _, keep := pinned[model.ID]; !keep {
+			continue
+		}
+		if _, exists := remoteIDs[model.ID]; exists {
+			continue
+		}
+		remote = append(remote, cloneModelInfo(model))
+		remoteIDs[model.ID] = struct{}{}
+	}
+	return remote
 }
 
 // detectChangedProviders compares two model catalogs and returns provider names

@@ -370,6 +370,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	setReasoningEffortMetadata(reqMeta, entryProtocol, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
 	setGenerateMetadata(reqMeta, rawJSON)
+	ctx = withCacheSessionContext(ctx, rawJSON, reqMeta)
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil

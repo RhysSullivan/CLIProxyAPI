@@ -7,6 +7,9 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/cachestatus"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	"golang.org/x/net/context"
 )
 
@@ -173,6 +176,21 @@ func WithDisallowFreeAuth(ctx context.Context) context.Context {
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, disallowFreeAuthContextKey{}, true)
+}
+
+// withCacheSessionContext propagates the Claude affinity session ID and the
+// effective prompt-cache TTL on the request context so the cache-status usage
+// plugin can correlate response cache tokens to a session. Only Claude Code
+// affinity sessions (the "claude:" prefix) are tracked; other traffic is left
+// untouched.
+func withCacheSessionContext(ctx context.Context, rawJSON []byte, meta map[string]any) context.Context {
+	sid := coreauth.ExtractSessionID(headersFromContext(ctx), rawJSON, meta)
+	if !strings.HasPrefix(sid, "claude:") {
+		return ctx
+	}
+	ctx = coreusage.WithSessionID(ctx, sid)
+	ctx = coreusage.WithCacheTTL(ctx, cachestatus.DetectInboundCacheTTL(rawJSON))
+	return ctx
 }
 
 // headersFromContext extracts the original HTTP request headers from the gin context

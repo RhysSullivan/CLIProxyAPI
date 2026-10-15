@@ -328,6 +328,9 @@ func publishCatalogBytes(data []byte) ([]string, error) {
 	if errValidate := validateModelsCatalog(&parsed); errValidate != nil {
 		return nil, errValidate
 	}
+	if err := preservePinnedEmbeddedModels(&parsed); err != nil {
+		return nil, err
+	}
 	old := getModels()
 	if len(parsed.Meta) == 0 && old != nil {
 		parsed.Meta = old.Meta
@@ -356,6 +359,10 @@ var generalCatalogUpdater = &catalogUpdater{
 var codexCatalogUpdater = &catalogUpdater{
 	fetchWithSource: dynamicCatalogFetcherWithSource(embeddedCodexClientModelsJSON, &codexClientModelsURLs, ValidateCodexClientModelsJSON),
 	publish: func(data []byte) ([]string, error) {
+		data, err := mergePinnedEmbeddedCodexClientModels(data, embeddedCodexClientModelsJSON, pinnedEmbeddedCodexModelIDs)
+		if err != nil {
+			return nil, err
+		}
 		_, errLoad := loadCodexClientModelsFromBytes(data, "catalog")
 		return nil, errLoad
 	},

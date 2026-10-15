@@ -1919,6 +1919,15 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 		} else {
 			result["display_name"] = model.ID
 		}
+		// Surface non-Anthropic (OpenAI/Codex) models in Claude clients' model
+		// pickers. Claude Code / Claude Desktop model discovery drops any model ID
+		// that doesn't look Anthropic unless the entry carries an
+		// anthropic_family_tier of a known family. The tier is only a grouping hint
+		// for the picker; requests still carry the real model ID, which the hub
+		// translates to/from the OpenAI protocol.
+		if tier := claudeForeignFamilyTier(model); tier != "" {
+			result["anthropic_family_tier"] = tier
+		}
 		maxInput := model.ContextLength
 		if maxInput <= 0 {
 			maxInput = DefaultClaudeMaxInputTokens
@@ -1988,6 +1997,40 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 			result["created"] = model.Created
 		}
 		return result
+	}
+}
+
+// claudeForeignFamilyTier returns an Anthropic family tier label ("haiku"/"sonnet")
+// used only to expose non-Anthropic models to Claude Code / Claude Desktop model
+// discovery, which filters out model IDs that don't look Anthropic unless they carry
+// an anthropic_family_tier of a known family. Anthropic-owned models return "" (they
+// pass the client's name check on their own). Only OpenAI-backed models are tagged,
+// since the hub translates those to/from the Anthropic Messages format; other
+// providers are left untagged so no unreachable picker entries appear. The tier is a
+// grouping hint only and never marks a family default, so Anthropic aliases (sonnet,
+// opus, ...) keep resolving to their real Claude models.
+func claudeForeignFamilyTier(model *ModelInfo) string {
+	if model == nil {
+		return ""
+	}
+	owner := strings.ToLower(model.OwnedBy)
+	if owner != "openai" {
+		return ""
+	}
+	id := strings.ToLower(model.ID)
+	// Skip non-chat models (e.g. image generation); they are not reachable through
+	// the Claude Messages endpoint and would only add broken picker entries.
+	if strings.Contains(id, "image") {
+		return ""
+	}
+	switch {
+	case strings.Contains(id, "mini"),
+		strings.Contains(id, "nano"),
+		strings.Contains(id, "lite"),
+		strings.Contains(id, "spark"):
+		return "haiku"
+	default:
+		return "sonnet"
 	}
 }
 

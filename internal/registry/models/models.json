@@ -2922,6 +2922,74 @@
       "native_capabilities": {
         "web_search": true
       }
+    },
+    {
+      "id": "gpt-daybreak-blue-latest",
+      "object": "model",
+      "created": 1788480000,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "Daybreak Blue",
+      "version": "gpt-daybreak-blue-latest",
+      "description": "Latest frontier agentic coding model for broad defensive cybersecurity work. Requires Trusted Access for Cyber.",
+      "context_length": 872000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ],
+      "native_capabilities": {
+        "web_search": true
+      }
+    },
+    {
+      "id": "gpt-daybreak-red-latest",
+      "object": "model",
+      "created": 1788480000,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "Daybreak Red",
+      "version": "gpt-daybreak-red-latest",
+      "description": "Cyber-permissive frontier model for authorized security work. Requires Trusted Access for Cyber.",
+      "context_length": 872000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ],
+      "native_capabilities": {
+        "web_search": true
+      }
     }
   ],
   "codex-team": [
@@ -3263,6 +3331,74 @@
           "medium",
           "high",
           "xhigh"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ],
+      "native_capabilities": {
+        "web_search": true
+      }
+    },
+    {
+      "id": "gpt-daybreak-blue-latest",
+      "object": "model",
+      "created": 1788480000,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "Daybreak Blue",
+      "version": "gpt-daybreak-blue-latest",
+      "description": "Latest frontier agentic coding model for broad defensive cybersecurity work. Requires Trusted Access for Cyber.",
+      "context_length": 872000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ],
+      "native_capabilities": {
+        "web_search": true
+      }
+    },
+    {
+      "id": "gpt-daybreak-red-latest",
+      "object": "model",
+      "created": 1788480000,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "Daybreak Red",
+      "version": "gpt-daybreak-red-latest",
+      "description": "Cyber-permissive frontier model for authorized security work. Requires Trusted Access for Cyber.",
+      "context_length": 872000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
         ]
       },
       "supportedInputModalities": [
@@ -3628,6 +3764,74 @@
       "native_capabilities": {
         "web_search": true
       }
+    },
+    {
+      "id": "gpt-daybreak-blue-latest",
+      "object": "model",
+      "created": 1788480000,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "Daybreak Blue",
+      "version": "gpt-daybreak-blue-latest",
+      "description": "Latest frontier agentic coding model for broad defensive cybersecurity work. Requires Trusted Access for Cyber.",
+      "context_length": 872000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ],
+      "native_capabilities": {
+        "web_search": true
+      }
+    },
+    {
+      "id": "gpt-daybreak-red-latest",
+      "object": "model",
+      "created": 1788480000,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "Daybreak Red",
+      "version": "gpt-daybreak-red-latest",
+      "description": "Cyber-permissive frontier model for authorized security work. Requires Trusted Access for Cyber.",
+      "context_length": 872000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ],
+      "native_capabilities": {
+        "web_search": true
+      }
     }
   ],
   "codex-pro": [
@@ -3969,6 +4173,74 @@
           "medium",
           "high",
           "xhigh"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ],
+      "native_capabilities": {
+        "web_search": true
+      }
+    },
+    {
+      "id": "gpt-daybreak-blue-latest",
+      "object": "model",
+      "created": 1788480000,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "Daybreak Blue",
+      "version": "gpt-daybreak-blue-latest",
+      "description": "Latest frontier agentic coding model for broad defensive cybersecurity work. Requires Trusted Access for Cyber.",
+      "context_length": 872000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ],
+      "native_capabilities": {
+        "web_search": true
+      }
+    },
+    {
+      "id": "gpt-daybreak-red-latest",
+      "object": "model",
+      "created": 1788480000,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "Daybreak Red",
+      "version": "gpt-daybreak-red-latest",
+      "description": "Cyber-permissive frontier model for authorized security work. Requires Trusted Access for Cyber.",
+      "context_length": 872000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
         ]
       },
       "supportedInputModalities": [

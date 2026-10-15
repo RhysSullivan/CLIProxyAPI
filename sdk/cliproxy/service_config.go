@@ -64,8 +64,9 @@ type routingRuntimeState struct {
 }
 
 func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
+	// This fork defaults to usage-aware routing rather than upstream's round-robin.
 	state := routingRuntimeState{
-		strategy:                 "round-robin",
+		strategy:                 "usage-aware",
 		sessionAffinityTTL:       time.Hour,
 		sessionAffinitySubagents: true,
 		sessionAffinityRebindOn:  coreauth.SessionAffinityRebindOnAny,
@@ -79,6 +80,10 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "weighted-round-robin"
 	case "fill-first", "fillfirst", "ff":
 		state.strategy = "fill-first"
+	case "round-robin", "roundrobin", "rr":
+		state.strategy = "round-robin"
+	case "usage-aware", "usageaware", "ua":
+		state.strategy = "usage-aware"
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
@@ -110,6 +115,8 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 		selector = &coreauth.WeightedRoundRobinSelector{}
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
+	case "usage-aware":
+		selector = &coreauth.UsageAwareSelector{}
 	default:
 		selector = &coreauth.RoundRobinSelector{}
 	}
