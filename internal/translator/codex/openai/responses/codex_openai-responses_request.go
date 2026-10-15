@@ -44,23 +44,20 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 		}
 	}
 	deleteCodexRequestFieldsDoc(rawJSON, ensureDoc, "max_completion_tokens", "max_tokens", "temperature", "top_p")
-	if serviceTier := ojson.GetBytesNoCopy(rawJSON, "service_tier"); serviceTier.Exists() {
-		if serviceTier.Type == ojson.String {
-			switch strings.ToLower(strings.TrimSpace(serviceTier.String())) {
-			case "priority", "fast":
-				if serviceTier.String() != "priority" {
-					_ = ensureDoc().Set("service_tier", "priority")
-				}
-			case "ultrafast":
-				if serviceTier.String() != "ultrafast" {
-					_ = ensureDoc().Set("service_tier", "ultrafast")
-				}
-			default:
-				_ = ensureDoc().Delete("service_tier")
-			}
-		} else {
-			_ = ensureDoc().Delete("service_tier")
+	// Force the priority ("fast") service tier on every Codex request so fast mode
+	// works through the proxy regardless of what the client sends — the desktop app
+	// hides its tier selector for custom providers and would otherwise send no/"fast"
+	// tier. Accounts not entitled to priority degrade gracefully to "default"
+	// upstream (no error). Upstream's "ultrafast" tier is the one value a client is
+	// still allowed to pick for itself.
+	// Only write when it differs so an already-priority payload stays zero-copy.
+	serviceTier := ojson.GetBytesNoCopy(rawJSON, "service_tier")
+	if serviceTier.Type == ojson.String && strings.EqualFold(strings.TrimSpace(serviceTier.String()), "ultrafast") {
+		if serviceTier.String() != "ultrafast" {
+			_ = ensureDoc().Set("service_tier", "ultrafast")
 		}
+	} else if serviceTier.Type != ojson.String || serviceTier.String() != "priority" {
+		_ = ensureDoc().Set("service_tier", "priority")
 	}
 
 	deleteCodexRequestFieldsDoc(rawJSON, ensureDoc, "truncation", "prompt_cache_options", "prompt_cache_retention")

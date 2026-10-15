@@ -198,6 +198,7 @@ type Manager struct {
 	executors                 map[string]ProviderExecutor
 	executorRevisions         map[string]uint64
 	selector                  Selector
+	usageSnapshotProvider     UsageSnapshotProvider
 	hook                      Hook
 	resultPolicy              atomic.Pointer[resultPolicyHolder]
 	mu                        sync.RWMutex

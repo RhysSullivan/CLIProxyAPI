@@ -740,6 +740,9 @@ func (m *Manager) SetSelector(selector Selector) {
 		m.mu.Unlock()
 		return
 	}
+	if setter, ok := selector.(UsageAwareSnapshotSetter); ok && m.usageSnapshotProvider != nil {
+		setter.SetUsageSnapshotProvider(m.usageSnapshotProvider)
+	}
 	m.selector = selector
 	m.mu.Unlock()
 
@@ -751,6 +754,20 @@ func (m *Manager) SetSelector(selector Selector) {
 	if m.scheduler != nil {
 		m.scheduler.setSelector(selector)
 		m.syncScheduler()
+	}
+}
+
+// SetUsageSnapshotProvider attaches cached usage snapshots to usage-aware selectors.
+func (m *Manager) SetUsageSnapshotProvider(provider UsageSnapshotProvider) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.usageSnapshotProvider = provider
+	selector := m.selector
+	m.mu.Unlock()
+	if setter, ok := selector.(UsageAwareSnapshotSetter); ok {
+		setter.SetUsageSnapshotProvider(provider)
 	}
 }
 

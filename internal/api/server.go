@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v8/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/api/middleware"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/cachestatus"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/live"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/client/musecode"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -27,12 +28,14 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/poolusage"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/wstunnel"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 	"gopkg.in/yaml.v3"
@@ -80,6 +83,9 @@ type Server struct {
 
 	// currentPath is the absolute path to the current working directory.
 	currentPath string
+
+	cacheTracker *cachestatus.Tracker
+	poolUsage    *poolusage.Handler
 
 	// wsRoutes tracks registered websocket upgrade paths.
 	wsRouteMu     sync.Mutex
@@ -270,6 +276,13 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	engine.Use(s.homeHeartbeatMiddleware())
 	engine.Use(s.exampleAPIKeySafeModeMiddleware())
 
+	s.cacheTracker = cachestatus.NewTracker()
+	coreusage.RegisterNamedPlugin("cache-status", cachestatus.NewPlugin(s.cacheTracker))
+	s.poolUsage = poolusage.NewHandler(cfg.AuthDir)
+	if authManager != nil {
+		authManager.SetUsageSnapshotProvider(s.poolUsage)
+	}
+
 	// Setup routes
 	s.setupRoutes()
 
@@ -452,6 +465,12 @@ func (s *Server) Start() error {
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
+	if s.cacheTracker != nil {
+		s.cacheTracker.Stop()
+	}
+	if s.poolUsage != nil {
+		s.poolUsage.Stop()
+	}
 
 	if s.keepAliveEnabled {
 		select {
