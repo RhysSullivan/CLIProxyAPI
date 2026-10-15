@@ -96,6 +96,8 @@ type Detail struct {
 type requestedModelAliasContextKey struct{}
 type reasoningEffortContextKey struct{}
 type serviceTierContextKey struct{}
+type sessionIDContextKey struct{}
+type cacheTTLContextKey struct{}
 type generateContextKey struct{}
 type streamContextKey struct{}
 type executionRequestIDContextKey struct{}
@@ -140,6 +142,54 @@ func TraceIDFromContext(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// CacheTTLDefault is the prompt-cache TTL assumed when a request does not opt
+// into the 1-hour cache.
+const CacheTTLDefault = 5 * time.Minute
+
+// WithSessionID stores the affinity session ID (e.g. "claude:<uuid>") for usage sinks.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sessionIDContextKey{}, sessionID)
+}
+
+// SessionIDFromContext returns the affinity session ID stored in ctx.
+func SessionIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if value, ok := ctx.Value(sessionIDContextKey{}).(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+// WithCacheTTL stores the effective prompt-cache TTL for usage sinks.
+func WithCacheTTL(ctx context.Context, ttl time.Duration) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ttl <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, cacheTTLContextKey{}, ttl)
+}
+
+// CacheTTLFromContext returns the prompt-cache TTL stored in ctx (default 5m).
+func CacheTTLFromContext(ctx context.Context) time.Duration {
+	if ctx != nil {
+		if ttl, ok := ctx.Value(cacheTTLContextKey{}).(time.Duration); ok && ttl > 0 {
+			return ttl
+		}
+	}
+	return CacheTTLDefault
 }
 
 // WithRequestedModelAlias stores the client-requested model name for usage sinks.

@@ -64,7 +64,7 @@ func newCodexWebsocketHintServer(t *testing.T, rec *codexWebsocketHintRecorder) 
 
 // Native Codex sends the routing hint only in the websocket handshake and keeps
 // an open connection when the tier changes. The gateway mirrors that: an
-// incremental request that turns on Fast continues on the same socket with the
+// incremental request that changes from ultrafast to priority continues on the same socket with the
 // original handshake hint (its body carries the new tier), and the next fresh
 // connection is dialed with the current hint. Whether the backend honors a
 // mid-connection tier change is not established by this test.
@@ -89,19 +89,19 @@ func TestCodexWebsocketsFastToggleKeepsIncrementalConnection(t *testing.T) {
 		}
 	}
 
-	execute(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+	execute(`{"model":"gpt-5.5","service_tier":"ultrafast","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
 	execute(`{"model":"gpt-5.5","service_tier":"priority","previous_response_id":"resp-1","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"again"}]}]}`)
 	exec.CloseExecutionSession(executionSessionID)
 	execute(`{"model":"gpt-5.5","service_tier":"priority","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"fresh"}]}]}`)
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	wantHandshakes := []string{"model=gpt-5.5", "model=gpt-5.5;tier=priority"}
+	wantHandshakes := []string{"model=gpt-5.5;tier=ultrafast", "model=gpt-5.5;tier=priority"}
 	if len(rec.handshakes) != len(wantHandshakes) || rec.handshakes[0] != wantHandshakes[0] || rec.handshakes[1] != wantHandshakes[1] {
 		t.Fatalf("handshakes = %q, want %q", rec.handshakes, wantHandshakes)
 	}
 	wantFrames := []codexWebsocketHintFrame{
-		{conn: 0, model: "gpt-5.5"},
+		{conn: 0, model: "gpt-5.5", tier: "ultrafast"},
 		{conn: 0, model: "gpt-5.5", tier: "priority", previousResponseID: "resp-1"},
 		{conn: 1, model: "gpt-5.5", tier: "priority"},
 	}

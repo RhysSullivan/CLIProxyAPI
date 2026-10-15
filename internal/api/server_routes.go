@@ -53,6 +53,15 @@ func (s *Server) setupRoutes() {
 	s.engine.GET("/healthz", healthzHandler)
 	s.engine.HEAD("/healthz", healthzHandler)
 
+	// Unauthenticated, tailnet-gated (same posture as /healthz): per-session
+	// Claude prompt-cache TTL, read by the CacheWatch menu bar app.
+	if s.cacheTracker != nil {
+		s.engine.GET("/cache-status", s.cacheTracker.Handle)
+	}
+	if s.poolUsage != nil {
+		s.engine.GET("/pool/usage", s.poolUsage.Handle)
+	}
+
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
@@ -145,6 +154,11 @@ func (s *Server) setupRoutes() {
 				"GET /v1/models",
 			},
 		})
+	})
+	// Connectivity preflight: clients like Claude Code (Bun runtime) send HEAD /
+	// to check the endpoint is reachable; answer 200 so they proceed to /v1/messages.
+	s.engine.HEAD("/", func(c *gin.Context) {
+		c.Status(http.StatusOK)
 	})
 
 	// OAuth callback endpoints (reuse main server port)

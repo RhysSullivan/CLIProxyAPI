@@ -281,7 +281,6 @@ func TestConvertOpenAIResponsesRequestToCodexNormalizesRequiredFields(t *testing
 		"max_completion_tokens",
 		"temperature",
 		"top_p",
-		"service_tier",
 		"truncation",
 		"prompt_cache_options",
 		"prompt_cache_retention",
@@ -290,6 +289,11 @@ func TestConvertOpenAIResponsesRequestToCodexNormalizesRequiredFields(t *testing
 		if gjson.GetBytes(output, path).Exists() {
 			t.Fatalf("%s should be removed: %s", path, output)
 		}
+	}
+	// This fork forces the priority ("fast") service tier on every Codex request
+	// instead of stripping a non-priority tier the way upstream does.
+	if got := gjson.GetBytes(output, "service_tier").String(); got != "priority" {
+		t.Fatalf("service_tier = %q, want priority: %s", got, output)
 	}
 }
 
@@ -911,44 +915,52 @@ func TestConvertOpenAIResponsesRequestToCodex_ServiceTier(t *testing.T) {
 			wantTier:   "ultrafast",
 		},
 		{
-			name:       "standard stripped",
+			name:       "standard forced to priority",
 			tierJSON:   `"standard"`,
-			wantExists: false,
+			wantExists: true,
+			wantTier:   "priority",
 		},
 		{
-			name:       "default stripped",
+			name:       "default forced to priority",
 			tierJSON:   `"default"`,
-			wantExists: false,
+			wantExists: true,
+			wantTier:   "priority",
 		},
 		{
-			name:       "flex stripped",
+			name:       "flex forced to priority",
 			tierJSON:   `"flex"`,
-			wantExists: false,
+			wantExists: true,
+			wantTier:   "priority",
 		},
 		{
-			name:       "non-string stripped",
+			name:       "non-string forced to priority",
 			tierJSON:   `123`,
-			wantExists: false,
+			wantExists: true,
+			wantTier:   "priority",
 		},
 		{
-			name:       "null stripped",
+			name:       "null forced to priority",
 			tierJSON:   `null`,
-			wantExists: false,
+			wantExists: true,
+			wantTier:   "priority",
 		},
 		{
-			name:       "bool stripped",
+			name:       "bool forced to priority",
 			tierJSON:   `true`,
-			wantExists: false,
+			wantExists: true,
+			wantTier:   "priority",
 		},
 		{
-			name:       "empty string stripped",
+			name:       "empty string forced to priority",
 			tierJSON:   `""`,
-			wantExists: false,
+			wantExists: true,
+			wantTier:   "priority",
 		},
 		{
-			name:       "whitespace string stripped",
+			name:       "whitespace string forced to priority",
 			tierJSON:   `"   "`,
-			wantExists: false,
+			wantExists: true,
+			wantTier:   "priority",
 		},
 	}
 

@@ -28,23 +28,20 @@ func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte,
 	rawJSON = setCodexRequiredInclude(rawJSON)
 	// Codex Responses rejects token limit fields, so strip them out before forwarding.
 	rawJSON = deleteCodexRequestFields(rawJSON, "max_output_tokens", "max_completion_tokens", "temperature", "top_p")
-	if serviceTier := gjson.GetBytes(rawJSON, "service_tier"); serviceTier.Exists() {
-		if serviceTier.Type == gjson.String {
-			switch strings.ToLower(strings.TrimSpace(serviceTier.String())) {
-			case "priority", "fast":
-				if serviceTier.String() != "priority" {
-					rawJSON, _ = sjson.SetBytes(rawJSON, "service_tier", "priority")
-				}
-			case "ultrafast":
-				if serviceTier.String() != "ultrafast" {
-					rawJSON, _ = sjson.SetBytes(rawJSON, "service_tier", "ultrafast")
-				}
-			default:
-				rawJSON = deleteCodexRequestFields(rawJSON, "service_tier")
-			}
-		} else {
-			rawJSON = deleteCodexRequestFields(rawJSON, "service_tier")
+	// Force the priority ("fast") service tier on every Codex request so fast mode
+	// works through the proxy regardless of what the client sends — the desktop app
+	// hides its tier selector for custom providers and would otherwise send no/“fast”
+	// tier (which the upstream rejects). Accounts not entitled to priority degrade
+	// gracefully to "default" upstream (no error). Upstream's "ultrafast" tier is the
+	// one value a client is still allowed to pick for itself.
+	// Only write when it differs so an already-priority payload stays zero-copy.
+	serviceTier := gjson.GetBytes(rawJSON, "service_tier")
+	if serviceTier.Type == gjson.String && strings.EqualFold(strings.TrimSpace(serviceTier.String()), "ultrafast") {
+		if serviceTier.String() != "ultrafast" {
+			rawJSON, _ = sjson.SetBytes(rawJSON, "service_tier", "ultrafast")
 		}
+	} else if serviceTier.String() != "priority" {
+		rawJSON, _ = sjson.SetBytes(rawJSON, "service_tier", "priority")
 	}
 
 	rawJSON = deleteCodexRequestFields(rawJSON, "truncation", "prompt_cache_options", "prompt_cache_retention")
