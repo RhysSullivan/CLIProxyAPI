@@ -287,6 +287,51 @@ func TestBackoffDoublesAfterFailureAndResetsAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestNewAccessTokenRefreshesDuringBackoff(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	authDir := t.TempDir()
+	filename := "claude-claude@example.com.json"
+	writeAuthFile(t, authDir, filename, `{
+		"email": "claude@example.com",
+		"access_token": "expired-token"
+	}`)
+
+	upstream := newPoolUsageFakeUpstream(t)
+	defer upstream.Close()
+	h := newTestHandler(authDir, upstream)
+	upstream.SetFail(true)
+	h.refreshDue(context.Background(), true)
+	upstream.SetFail(false)
+
+	records, err := h.discoverAccounts()
+	if err != nil {
+		t.Fatalf("discover accounts: %v", err)
+	}
+	if due := h.syncAccounts(records, h.now(), false); len(due) != 0 {
+		t.Fatalf("due during backoff with unchanged token = %d, want 0", len(due))
+	}
+
+	writeAuthFile(t, authDir, filename, `{
+		"email": "claude@example.com",
+		"access_token": "new-login-token"
+	}`)
+	h.refreshDue(context.Background(), false)
+
+	accounts := getUsageAccounts(t, h)
+	if len(accounts) != 1 {
+		t.Fatalf("accounts len = %d", len(accounts))
+	}
+	if a := accounts[0]; !a.OK || a.Stale || a.LastError != nil {
+		t.Fatalf("status = ok:%t stale:%t lastError:%v, want fresh after new token", a.OK, a.Stale, a.LastError)
+	}
+	h.mu.RLock()
+	backoff := h.accounts[filename].Backoff
+	h.mu.RUnlock()
+	if backoff != h.refreshEvery {
+		t.Fatalf("backoff = %s, want reset to %s", backoff, h.refreshEvery)
+	}
+}
+
 func TestDisabledCodexFileSkipped(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	authDir := t.TempDir()
