@@ -404,6 +404,12 @@ func (h *Handler) syncAccounts(records []authAccount, now time.Time, force bool)
 			st = &accountState{Backoff: h.refreshEvery}
 			h.accounts[rec.Filename] = st
 		}
+		// A new access token (re-login or token refresh) can fix the error that
+		// set the backoff, so refresh that account on this pass.
+		if st.LastError != "" && st.Meta.Token != rec.Token {
+			st.Backoff = h.refreshEvery
+			st.NextRefresh = time.Time{}
+		}
 		st.Meta = rec
 		if st.Backoff <= 0 {
 			st.Backoff = h.refreshEvery
