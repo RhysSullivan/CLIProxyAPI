@@ -1053,8 +1053,9 @@ func TestCodexExecutorHostedImageGenerationPassthroughPreservesModelAndToolParam
 				if gotModel := ojson.GetBytes(gotBody, "model").String(); gotModel != "gpt-6-astra" {
 					t.Fatalf("passthrough upstream model = %q, want gpt-6-astra; body=%s", gotModel, gotBody)
 				}
-				if gotHint != "model=gpt-6-astra" {
-					t.Fatalf("passthrough X-Codex-Routing-Hint = %q, want model=gpt-6-astra", gotHint)
+				// This fork forces service_tier=priority on Codex requests, so the hint carries it.
+				if gotHint != "model=gpt-6-astra;tier=priority" {
+					t.Fatalf("passthrough X-Codex-Routing-Hint = %q, want model=gpt-6-astra;tier=priority", gotHint)
 				}
 				if gotComplexity := ojson.GetBytes(gotBody, "tools.0.complexity").String(); gotComplexity != "high" {
 					t.Fatalf("passthrough tools.0.complexity = %q, want high; body=%s", gotComplexity, gotBody)
@@ -1159,8 +1160,9 @@ func TestCodexExecutorOptionalImageGenerationPreservesChatModelAndGuidesOnAutoTr
 				if gotModel := ojson.GetBytes(gotBody, "model").String(); gotModel != "gpt-6-astra" {
 					t.Fatalf("upstream model = %q, want gpt-6-astra; body=%s", gotModel, gotBody)
 				}
-				if gotHint != "model=gpt-6-astra" {
-					t.Fatalf("X-Codex-Routing-Hint = %q, want model=gpt-6-astra", gotHint)
+				// This fork forces service_tier=priority on Codex requests, so the hint carries it.
+				if gotHint != "model=gpt-6-astra;tier=priority" {
+					t.Fatalf("X-Codex-Routing-Hint = %q, want model=gpt-6-astra;tier=priority", gotHint)
 				}
 				if ojson.GetBytes(gotBody, "tools.0.complexity").Exists() {
 					t.Fatalf("tools.0.complexity should be stripped; body=%s", gotBody)

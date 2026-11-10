@@ -350,7 +350,8 @@ func TestCodexHostedImageValidationUsesFinalPayload(t *testing.T) {
 					if wantModel == "" {
 						wantModel = model
 					}
-					if ojson.GetBytes(got.body, "model").String() != wantModel || got.headers.Get("X-Codex-Routing-Hint") != "model="+wantModel {
+					// This fork forces service_tier=priority on Codex requests, so the hint carries it.
+					if ojson.GetBytes(got.body, "model").String() != wantModel || got.headers.Get("X-Codex-Routing-Hint") != "model="+wantModel+";tier=priority" {
 						t.Fatalf("model or routing hint changed: body=%s hint=%s", got.body, got.headers.Get("X-Codex-Routing-Hint"))
 					}
 					if tc.wantLite != "" && got.headers.Get(codexResponsesLiteHeader) != tc.wantLite {
