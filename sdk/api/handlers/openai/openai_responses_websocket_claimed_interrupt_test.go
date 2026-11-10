@@ -11,6 +11,8 @@ import (
 func TestResponsesLocalInterruptRetainsClaimedFrameAfterEnd(t *testing.T) {
 	local := newResponsesLocalInterrupt()
 	local.begin(false)
+	// This fork only claims interrupts for the response currently streaming.
+	local.observe([]byte(`{"type":"response.created","response":{"id":"unknown"}}`))
 	if !local.deliver([]byte(`{"type":"response.interrupt","response_id":"unknown"}`)) {
 		t.Fatal("frame was not claimed while active")
 	}
@@ -41,10 +43,12 @@ func TestResponsesLocalInterruptRetainsClaimedFrameAfterEnd(t *testing.T) {
 func TestResponsesLocalInterruptRejectsWhenQueueFull(t *testing.T) {
 	local := newResponsesLocalInterrupt()
 	local.begin(false)
+	local.observe([]byte(`{"type":"response.created","response":{"id":"first"}}`))
 	if !local.deliver([]byte(`{"type":"response.interrupt","response_id":"first"}`)) {
 		t.Fatal("first frame was not claimed")
 	}
-	if local.deliver([]byte(`{"type":"response.interrupt","response_id":"second"}`)) {
+	// Same response ID, so only the full queue can reject this frame.
+	if local.deliver([]byte(`{"type":"response.interrupt","response_id":"first","mode":"second"}`)) {
 		t.Fatal("second frame claimed while queue was full")
 	}
 	frame := local.takeClaimed()
@@ -69,6 +73,7 @@ func TestResponsesLocalInterruptWebsocketOwnershipIsAtomic(t *testing.T) {
 	}
 	local.endWebsocketTurn()
 	local.begin(false)
+	local.observe([]byte(`{"type":"response.created","response":{"id":"r1"}}`))
 	if !local.deliver([]byte(`{"type":"response.interrupt","response_id":"r1"}`)) {
 		t.Fatal("frame not claimed for an HTTP turn")
 	}

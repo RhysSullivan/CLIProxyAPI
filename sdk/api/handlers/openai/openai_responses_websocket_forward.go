@@ -138,6 +138,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 				}
 				continue
 			}
+			opts.localInterrupt.finish(interruptPayload)
 			return completeResponsesWebsocketLocalInterrupt(writer, wsTimelineLog, cancel, interruptPayload, outputItemsByIndex, outputItemsFallback, pendingToolCallIDs)
 		case <-c.Request.Context().Done():
 			cause := context.Cause(c.Request.Context())
@@ -200,6 +201,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 			if opts.localInterrupt != nil {
 				if interruptPayload := opts.localInterrupt.takeClaimed(); interruptPayload != nil {
 					if !turnEnded {
+						opts.localInterrupt.finish(interruptPayload)
 						return completeResponsesWebsocketLocalInterrupt(writer, wsTimelineLog, cancel, interruptPayload, outputItemsByIndex, outputItemsFallback, pendingToolCallIDs)
 					}
 					// The response is over: reject instead of fabricating an
@@ -217,6 +219,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 			payloads := websocketJSONPayloadsFromChunk(chunk)
 			for i := range payloads {
 				eventType := ojson.GetBytesNoCopy(payloads[i], "type").String()
+				opts.localInterrupt.observe(payloads[i])
 				if eventType == "response.subscription_usage" ||
 					(eventType == "response.metadata" && !isCodexResponsesClientRequest(c)) {
 					continue
