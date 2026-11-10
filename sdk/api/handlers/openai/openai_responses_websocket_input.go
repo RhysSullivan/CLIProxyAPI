@@ -29,15 +29,23 @@ import (
 // runs on an upstream websocket, no frame may claim the local path at all,
 // not even in the window after that socket was lost. "No live websocket
 // channel right now" must never be read as "this turn is HTTP".
+//
+// responseID binds local claims to the response currently streaming, and
+// terminalIDs remembers every response that ended on this downstream socket.
+// HTTP fallback has no upstream websocket session in which to remember
+// terminal IDs, so late or duplicate interrupts for a finished response are
+// answered as handled here instead of failing or canceling the next turn.
 type responsesLocalInterrupt struct {
 	mu           sync.Mutex
 	active       bool
 	wsTurnActive bool
 	frames       chan []byte
+	responseID   string
+	terminalIDs  map[string]struct{}
 }
 
 func newResponsesLocalInterrupt() *responsesLocalInterrupt {
-	return &responsesLocalInterrupt{frames: make(chan []byte, 1)}
+	return &responsesLocalInterrupt{frames: make(chan []byte, 1), terminalIDs: make(map[string]struct{})}
 }
 
 // begin activates claims for a turn and records its ownership in the same
@@ -50,6 +58,7 @@ func (s *responsesLocalInterrupt) begin(websocketOwned bool) {
 	s.mu.Lock()
 	s.active = true
 	s.wsTurnActive = websocketOwned
+	s.responseID = ""
 	s.mu.Unlock()
 }
 
@@ -115,7 +124,7 @@ func (s *responsesLocalInterrupt) deliver(payload []byte) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.active || s.wsTurnActive {
+	if !s.active || s.wsTurnActive || s.responseID == "" || ojson.GetBytesNoCopy(payload, "response_id").String() != s.responseID {
 		return false
 	}
 	select {
@@ -124,6 +133,58 @@ func (s *responsesLocalInterrupt) deliver(payload []byte) bool {
 	default:
 		return false
 	}
+}
+
+// observe records response lifecycle. Call it before the payload is written
+// downstream so a client cannot interrupt a response it already saw end.
+func (s *responsesLocalInterrupt) observe(payload []byte) {
+	if s == nil {
+		return
+	}
+	event := ojson.GetBytesNoCopy(payload, "type").String()
+	id := ojson.GetBytesNoCopy(payload, "response.id").String()
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event == "response.created" {
+		s.responseID = id
+		return
+	}
+	if isResponsesWebsocketCompletionEvent(event) || event == "response.incomplete" || event == "response.failed" {
+		s.terminalIDs[id] = struct{}{}
+	}
+}
+
+// finish records a locally interrupted response as terminal.
+func (s *responsesLocalInterrupt) finish(payload []byte) {
+	if s == nil {
+		return
+	}
+	id := ojson.GetBytesNoCopy(payload, "response_id").String()
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.terminalIDs[id] = struct{}{}
+}
+
+// alreadyTerminal reports whether the interrupt targets a response that has
+// already ended on this downstream socket.
+func (s *responsesLocalInterrupt) alreadyTerminal(payload []byte) bool {
+	if s == nil {
+		return false
+	}
+	id := ojson.GetBytesNoCopy(payload, "response_id").String()
+	if id == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, terminal := s.terminalIDs[id]
+	return terminal
 }
 
 func (s *responsesLocalInterrupt) framesChan() <-chan []byte {
@@ -170,6 +231,10 @@ func readResponsesWebsocketInput(ctx context.Context, cancel context.CancelCause
 			// response_id, mode, and extension fields must reach upstream unchanged.
 			if json.Valid(payload) && ojson.GetBytesNoCopy(payload, "type").String() == "response.interrupt" {
 				appendResponsesInterruptDiagnostic(timeline, payload, "")
+				if local.alreadyTerminal(payload) {
+					appendResponsesInterruptDiagnostic(timeline, payload, "handled")
+					continue
+				}
 				errInterrupt := interrupt(payload)
 				switch {
 				case errInterrupt == nil:

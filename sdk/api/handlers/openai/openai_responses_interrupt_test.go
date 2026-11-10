@@ -448,6 +448,26 @@ func TestResponsesInterruptStopsHTTPUpstream(t *testing.T) {
 	if got := ojson.GetBytesNoCopy(followDone, "type").String(); got != "response.completed" {
 		t.Fatalf("expected follow-up response.completed, got %s", followDone)
 	}
+
+	// Controls delayed until after HTTP completion must not return 400 or cancel
+	// the following create on this same downstream socket.
+	for _, id := range []string{"r-http", "r-http-2", "r-http-2"} {
+		if err := client.WriteJSON(map[string]string{"type": "response.interrupt", "response_id": id, "mode": "discard_partial_items"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := client.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"response.create","model":%q,"input":[]}`, model))); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"response.created", "response.completed"} {
+		_, payload, err := client.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ojson.GetBytes(payload, "type").String(); got != expected {
+			t.Fatalf("late interrupt poisoned next HTTP turn: got %s, want %s", payload, expected)
+		}
+	}
 }
 
 // TestResponsesInterruptUsesHomeSessionAuth verifies that a credential staged only
