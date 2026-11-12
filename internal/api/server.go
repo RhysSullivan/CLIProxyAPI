@@ -250,7 +250,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 
 	s.cacheTracker = cachestatus.NewTracker()
 	coreusage.RegisterNamedPlugin("cache-status", cachestatus.NewPlugin(s.cacheTracker))
-	s.poolUsage = poolusage.NewHandler(cfg.AuthDir)
+	s.poolUsage = poolusage.NewHandlerWithAuthManager(cfg.AuthDir, authManager)
 	if authManager != nil {
 		authManager.SetUsageSnapshotProvider(s.poolUsage)
 	}
