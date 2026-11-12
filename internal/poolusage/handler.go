@@ -51,6 +51,7 @@ var (
 type Handler struct {
 	authDir string
 	client  *http.Client
+	manager *coreauth.Manager
 
 	anthropicBase string
 	codexBase     string
@@ -70,6 +71,7 @@ type Handler struct {
 }
 
 type handlerOptions struct {
+	manager       *coreauth.Manager
 	client        *http.Client
 	anthropicBase string
 	codexBase     string
@@ -82,7 +84,14 @@ type handlerOptions struct {
 
 // NewHandler returns a handler reading credentials from authDir.
 func NewHandler(authDir string) *Handler {
+	return NewHandlerWithAuthManager(authDir, nil)
+}
+
+// NewHandlerWithAuthManager connects fresh usage observations and dashboard
+// routing status to the live scheduler. Cached reads never reset cooldowns.
+func NewHandlerWithAuthManager(authDir string, manager *coreauth.Manager) *Handler {
 	return newHandler(authDir, handlerOptions{
+		manager:       manager,
 		anthropicBase: baseFromEnv("POOL_USAGE_ANTHROPIC_BASE_URL", anthropicBaseURL),
 		codexBase:     baseFromEnv("POOL_USAGE_CODEX_BASE_URL", codexBaseURL),
 		startLoop:     true,
@@ -103,6 +112,7 @@ func newHandler(authDir string, opts handlerOptions) *Handler {
 		now = time.Now
 	}
 	h := &Handler{
+		manager:       opts.manager,
 		authDir:       authDir,
 		client:        client,
 		anthropicBase: cleanBase(opts.anthropicBase, defaultAnthropicBase),
@@ -156,21 +166,23 @@ type accountState struct {
 }
 
 type account struct {
-	Provider               string        `json:"provider"`
-	Email                  string        `json:"email"`
-	Tier                   string        `json:"tier,omitempty"`
-	FiveHourUtil           *float64      `json:"fiveHourUtil"`
-	SevenDayUtil           *float64      `json:"sevenDayUtil"`
-	FiveHourResetsAt       string        `json:"fiveHourResetsAt,omitempty"`
-	SevenDayResetsAt       string        `json:"sevenDayResetsAt,omitempty"`
-	PrimaryWindowSeconds   int64         `json:"primaryWindowSeconds,omitempty"`
-	SecondaryWindowSeconds int64         `json:"secondaryWindowSeconds,omitempty"`
-	Scoped                 []scopedLimit `json:"scoped,omitempty"`
-	OK                     bool          `json:"ok"`
-	Stale                  bool          `json:"stale"`
-	FetchedAt              *time.Time    `json:"fetchedAt"`
-	LastError              *string       `json:"lastError"`
-	Error                  string        `json:"error,omitempty"`
+	authID                 string
+	Routing                *coreauth.RoutingAvailability `json:"routing,omitempty"`
+	Provider               string                        `json:"provider"`
+	Email                  string                        `json:"email"`
+	Tier                   string                        `json:"tier,omitempty"`
+	FiveHourUtil           *float64                      `json:"fiveHourUtil"`
+	SevenDayUtil           *float64                      `json:"sevenDayUtil"`
+	FiveHourResetsAt       string                        `json:"fiveHourResetsAt,omitempty"`
+	SevenDayResetsAt       string                        `json:"sevenDayResetsAt,omitempty"`
+	PrimaryWindowSeconds   int64                         `json:"primaryWindowSeconds,omitempty"`
+	SecondaryWindowSeconds int64                         `json:"secondaryWindowSeconds,omitempty"`
+	Scoped                 []scopedLimit                 `json:"scoped,omitempty"`
+	OK                     bool                          `json:"ok"`
+	Stale                  bool                          `json:"stale"`
+	FetchedAt              *time.Time                    `json:"fetchedAt"`
+	LastError              *string                       `json:"lastError"`
+	Error                  string                        `json:"error,omitempty"`
 }
 
 // scopedLimit is a per-model (or per-surface) rate-limit window from the
@@ -218,6 +230,10 @@ func (h *Handler) Stop() {
 // Handle serves GET /pool/usage from the in-memory cache only.
 func (h *Handler) Handle(c *gin.Context) {
 	accounts := h.Snapshot()
+	for i := range accounts {
+		routing := h.manager.RoutingAvailability(accounts[i].authID, h.now())
+		accounts[i].Routing = &routing
+	}
 	c.JSON(http.StatusOK, gin.H{"now": h.now().UTC(), "accounts": accounts})
 }
 
@@ -229,7 +245,9 @@ func (h *Handler) Snapshot() []account {
 	h.mu.RLock()
 	out := make([]account, 0, len(h.accounts))
 	for _, st := range h.accounts {
-		out = append(out, st.snapshot())
+		a := st.snapshot()
+		a.authID = st.Meta.Filename
+		out = append(out, a)
 	}
 	h.mu.RUnlock()
 	sort.Slice(out, func(i, j int) bool {
@@ -382,6 +400,12 @@ func (h *Handler) refreshDue(ctx context.Context, force bool) {
 		fetchedAt := h.now().UTC()
 		a, errFetch := h.fetchAccount(ctx, rec, fetchedAt)
 		h.applyRefreshResult(rec, a, errFetch, fetchedAt)
+		if errFetch == nil && rec.Provider == providerClaude && h.manager != nil {
+			h.manager.ReconcileClaudeUsage(ctx, coreauth.ClaudeUsageObservation{
+				AuthID: rec.Filename, AccessToken: rec.Token, StartedAt: fetchedAt,
+				FiveHourUtil: a.FiveHourUtil, SevenDayUtil: a.SevenDayUtil,
+			})
+		}
 	}
 }
 
@@ -583,13 +607,13 @@ func (h *Handler) fetchClaude(ctx context.Context, rec authAccount, fetchedAt ti
 	if err != nil {
 		return a, err
 	}
-	if v := ojson.GetBytes(usage, "five_hour.utilization"); v.Exists() && v.Type != ojson.Null {
+	if v := ojson.GetBytes(usage, "five_hour.utilization"); v.Type == ojson.Number {
 		f := v.Float()
 		a.FiveHourUtil = &f
 	}
 	a.FiveHourResetsAt = ojson.GetBytes(usage, "five_hour.resets_at").String()
 	a.PrimaryWindowSeconds = 18000
-	if v := ojson.GetBytes(usage, "seven_day.utilization"); v.Exists() && v.Type != ojson.Null {
+	if v := ojson.GetBytes(usage, "seven_day.utilization"); v.Type == ojson.Number {
 		f := v.Float()
 		a.SevenDayUtil = &f
 	}
