@@ -50,9 +50,11 @@
 #     on the old binary just before makes a provider fault then unlikely.
 #  7. On success: re-verifies the installed and running sha, records success,
 #     disarms the guard. On failure, rollback in this order: install the old
-#     binary, restart onto it and wait for /healthz, then put the config back,
-#     then check /v1/models and 10 s of stability, and disarm. A failed config
-#     restore does not stop the rollback: the old binary accepts the edited
+#     binary, put the config back, restart onto the old binary and wait for
+#     /healthz, then check /v1/models and 10 s of stability, and disarm. The
+#     config goes back before the restart so the old process starts on it and
+#     its config watch sees later writes. A failed config restore does not stop
+#     the rollback: the old binary accepts the edited
 #     config, so the service comes back on it and the RESULT line says
 #     "CONFIG RECOVERY INCOMPLETE" with the key left and the backup path
 #     (state config_restored=no). If the rollback fails, the guard stays armed
@@ -61,10 +63,12 @@
 #     an attempt starts and read back before the next, so an attempt that is
 #     killed or times out still counts. After 3 attempts, the next tick makes
 #     one final action (written as started before it runs, never repeated):
-#     install and start the old binary, try the config. Then it records
+#     try the config, install and start the old binary. Then it records
 #     needs-human, with a RESULT line saying what is actually running (old
 #     binary up, CANDIDATE STILL RUNNING, or nothing healthy) and whether the
-#     config was restored, and disarms.
+#     config was restored, and disarms. If the state file cannot be written,
+#     attempts cannot be counted: the guard disarms its timer first, then makes
+#     the final action, so that action runs at most once.
 #
 # No management endpoint is called, so a deploy uses zero failed management
 # logins (the old script's X-CPA-VERSION probe used one per process).
@@ -424,31 +428,33 @@ restore_config() {
 	return 0
 }
 
-# Idempotent. Order: what gets a working service back comes first. Installs the
-# pinned old binary, makes the unit run it, then puts the config back (not
-# fatal), then checks /v1/models and stability.
+# Idempotent. Installs the pinned old binary, puts the config back (not fatal),
+# then makes the unit run the old binary, then checks /v1/models and stability.
+# The config goes back before the old process starts, so it starts on the
+# restored config and its config watch is set up after that write.
 restore_old() {
 	pause_hook restore
 	if [[ "$(sha_of "$LIVE_BIN")" != "$OLD_SHA" ]]; then
 		install_file "$BIN_BACKUP" "$LIVE_BIN" "$OLD_SHA" 755 || return 1
 		log "  restored $OLD_VERSION binary"
 	fi
-	start_old || return 1
 	restore_config
+	start_old || return 1
 	if make_auth_headers; then check_models; local m=$?; drop_auth_headers; (( m == 0 )) || return 1; fi
 	stable_for "$RESTORE_STABLE"
 }
 
 # Guard's last step, at most once (final_action is persisted before it starts
-# when the state file is writable, so a kill is not repeated): put the old
-# binary in place and start it, try the config, then record needs-human with
+# when the state file is writable, so a kill is not repeated): try the config,
+# put the old binary in place and start it, then record needs-human with
 # what is actually installed and running, and disarm.
 guard_give_up() { # why
 	if [[ -z "$(state_get final_action)" ]]; then
 		state_set final_action started || guard_stop_unwritable
-		log "guard: $1; final action (runs once): install and start $OLD_VERSION"
+		log "guard: $1; final action (runs once): restore the config, install and start $OLD_VERSION"
 		pause_hook final
-		final_old_binary && restore_config
+		restore_config
+		final_old_binary
 		state_set final_action done
 	else
 		log "guard: the final action was cut off on an earlier tick (final_action=$(state_get final_action)); not repeating it"
@@ -456,10 +462,13 @@ guard_give_up() { # why
 	needs_human "$1, then made its final action"
 }
 
-# The state file cannot be written, so attempts cannot be counted. This run
-# disarms the guard, so the final action here is bounded too.
+# The state file cannot be written, so attempts cannot be counted and the
+# final action cannot be marked as started. Disarm the timer first, so this
+# final action runs at most once even if this run is killed during it.
 guard_stop_unwritable() {
-	log "guard: cannot write $STATE, so restore attempts cannot be counted; final action, then the guard stops"
+	log "guard: cannot write $STATE, so restore attempts cannot be counted; disarming the guard, then one final action"
+	disarm_guard
+	log "RESULT: NEEDS A HUMAN. The guard cannot write $STATE and has stopped; it is now making its one final action (install and start $OLD_VERSION). If no later RESULT line follows, that action was cut off: check what $UNIT is running."
 	final_old_binary
 	needs_human "The guard cannot write $STATE, so it cannot count restore attempts; it made one final action and stopped"
 }

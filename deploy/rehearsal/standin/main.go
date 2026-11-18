@@ -5,17 +5,82 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
+	"unsafe"
 )
 
 var (
-	Version = "v0"
-	Mode    = "good" // good | crash | badreq
+	Version    = "v0"
+	Mode       = "good" // good | crash | badreq
+	StartDelay = "0"    // seconds to wait before listening (slow start)
 )
+
+// Config watch, modelled on the engine: the config is read once at start and
+// the watch is added only after the server already answers, so a write in
+// that window is missed until the next write. /standin/config reports the
+// sha of the config the process has loaded.
+var (
+	cfgMu     sync.Mutex
+	loadedSha string
+	reloads   int
+)
+
+func fileSha(p string) string {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return "unreadable"
+	}
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:])
+}
+
+func watchConfig(path string) {
+	fd, err := syscall.InotifyInit()
+	if err != nil {
+		fmt.Println("inotify:", err)
+		return
+	}
+	if _, err := syscall.InotifyAddWatch(fd, filepath.Dir(path), syscall.IN_CLOSE_WRITE|syscall.IN_MOVED_TO|syscall.IN_CREATE); err != nil {
+		fmt.Println("inotify watch:", err)
+		return
+	}
+	fmt.Println("stand-in: config watch active")
+	buf := make([]byte, 64*1024)
+	for {
+		n, err := syscall.Read(fd, buf)
+		if err != nil || n <= 0 {
+			return
+		}
+		for off := 0; off+syscall.SizeofInotifyEvent <= n; {
+			ev := (*syscall.InotifyEvent)(unsafe.Pointer(&buf[off]))
+			nameBytes := buf[off+syscall.SizeofInotifyEvent : off+syscall.SizeofInotifyEvent+int(ev.Len)]
+			name := strings.TrimRight(string(nameBytes), "\x00")
+			off += syscall.SizeofInotifyEvent + int(ev.Len)
+			if name == filepath.Base(path) {
+				time.Sleep(100 * time.Millisecond)
+				sha := fileSha(path)
+				cfgMu.Lock()
+				if sha != loadedSha {
+					loadedSha = sha
+					reloads++
+					fmt.Println("stand-in: config reloaded")
+				}
+				cfgMu.Unlock()
+			}
+		}
+	}
+}
 
 func main() {
 	cfg := flag.String("config", "", "config path")
@@ -29,7 +94,12 @@ func main() {
 		fmt.Println("stand-in: crashing at start")
 		os.Exit(1)
 	}
+	if d, _ := strconv.Atoi(StartDelay); d > 0 {
+		fmt.Printf("stand-in: slow start, %ds\n", d)
+		time.Sleep(time.Duration(d) * time.Second)
+	}
 	port, key := "", ""
+	loadedSha = fileSha(*cfg)
 	f, err := os.Open(*cfg)
 	if err != nil {
 		fmt.Println("no config:", err)
@@ -88,6 +158,12 @@ func main() {
 		}
 		w.Write([]byte(`{"model":"gpt-5.6-luna","status":"completed","output":[{"type":"message"}]}`))
 	})
+	http.HandleFunc("/standin/config", func(w http.ResponseWriter, r *http.Request) {
+		cfgMu.Lock()
+		defer cfgMu.Unlock()
+		fmt.Fprintf(w, "%s %d\n", loadedSha, reloads)
+	})
+	go func() { time.Sleep(5 * time.Second); watchConfig(*cfg) }()
 	fmt.Println("API server started successfully on: 127.0.0.1:" + port)
 	if err := http.ListenAndServe("127.0.0.1:"+port, nil); err != nil {
 		fmt.Println(err)
