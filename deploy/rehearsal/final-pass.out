@@ -1,0 +1,82 @@
+CONCURRENT: REFUSED: a deploy is already running (lock held); nothing started exit=4
+KILLED f4-kill-swap at swap
+KILLED f5-kill-checks at checks
+RERUN: 04:42:03Z RESULT: already deployed; nothing changed
+--- outcome [f1-success]
+phase=succeeded
+serving: pid=3039516 exe=2eb74f482b74 expected-new=2eb74f482b74 match=yes
+healthz=200
+installed=2eb74f482b74
+config=edited (1 fallback line)
+guard units left: 0 ; guard timer: inactive
+secret in logs: 0 files
+--- log
+result: run-f1-success/state/logs/deploy-20261118T044203Z-3045225.log:04:42:03Z RESULT: already deployed; nothing changed
+
+--- outcome [f2-crash]
+phase=rolled-back
+serving: pid=3044615 exe=3293d9e870c6 expected-old=3293d9e870c6 match=yes
+healthz=200
+installed=3293d9e870c6
+config=original
+guard units left: 0 ; guard timer: inactive
+secret in logs: 0 files
+--- log
+result: 04:42:02Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-dfx/run-f2-crash/cand/cli-proxy-api-plus.v8.0.77-rhys.1
+
+--- outcome [f3-badreq]
+phase=rolled-back
+serving: pid=3039966 exe=3293d9e870c6 expected-old=3293d9e870c6 match=yes
+healthz=200
+installed=3293d9e870c6
+config=original
+guard units left: 0 ; guard timer: inactive
+secret in logs: 0 files
+--- log
+result: 04:41:02Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-dfx/run-f3-badreq/cand/cli-proxy-api-plus.v8.0.77-rhys.1
+
+--- outcome [f4-kill-swap]
+phase=recovered
+serving: pid=3038237 exe=3293d9e870c6 expected-old=3293d9e870c6 match=yes
+healthz=200
+installed=3293d9e870c6
+config=original
+guard units left: 0 ; guard timer: inactive
+secret in logs: 0 files
+--- log
+result: 04:41:13Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+
+--- outcome [f5-kill-checks]
+phase=recovered
+serving: pid=3041013 exe=3293d9e870c6 expected-old=3293d9e870c6 match=yes
+healthz=200
+installed=3293d9e870c6
+config=original
+guard units left: 0 ; guard timer: inactive
+secret in logs: 0 files
+--- log
+result: 04:41:13Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+
+--- outcome [f6-rollback-fails]
+phase=recovered
+serving: pid=3041033 exe=3293d9e870c6 expected-old=3293d9e870c6 match=yes
+healthz=200
+installed=3293d9e870c6
+config=original
+guard units left: 0 ; guard timer: inactive
+secret in logs: 0 files
+--- log
+result: 04:41:13Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+
+--- outcome [f7-runtime-limit]
+phase=recovered
+serving: pid=3042708 exe=3293d9e870c6 expected-old=3293d9e870c6 match=yes
+healthz=200
+installed=3293d9e870c6
+config=original
+guard units left: 0 ; guard timer: inactive
+secret in logs: 0 files
+--- log
+result: 04:41:34Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+
+leftover rehearsal units: 0; unit files: 0
