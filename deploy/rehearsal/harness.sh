@@ -77,10 +77,12 @@ teardown() {
 	local n="$1"
 	local u
 	# One unit per call: systemctl stops nothing if any named unit is not loaded.
+	systemctl --user disable --now "vpe-rh-guard-run-$n.timer" 2>/dev/null
 	for u in "vpe-rh-guard-run-$n.timer" "vpe-rh-guard-run-$n.service" "vpe-fx-engine-$n.service"; do
 		systemctl --user stop "$u" 2>/dev/null
 	done
-	rm -f "$UD/vpe-fx-engine-$n.service" "$UD/vpe-rh-guard-run-$n.service" "$UD/vpe-rh-guard-run-$n.timer"
+	rm -f "$UD/vpe-fx-engine-$n.service" "$UD/vpe-rh-guard-run-$n.service" "$UD/vpe-rh-guard-run-$n.timer" \
+		"$UD/timers.target.wants/vpe-rh-guard-run-$n.timer"
 	systemctl --user daemon-reload
 	for u in "vpe-rh-guard-run-$n.timer" "vpe-rh-guard-run-$n.service" "vpe-fx-engine-$n.service"; do
 		systemctl --user reset-failed "$u" 2>/dev/null

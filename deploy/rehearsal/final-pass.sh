@@ -20,7 +20,7 @@ assert() {
 	[[ "$(st "$n" final_check)" == "$want_check" ]] || fails+=("final_check '$(st "$n" final_check)' not '$want_check'")
 	[[ "$(sha256sum "$R/live/merged-config.yaml" | cut -d' ' -f1)" == "$(cat "$R/config.sha0")" ]] && cfg=original || cfg=edited
 	[[ "$cfg" == "$want_cfg" ]] || fails+=("config $cfg not $want_cfg")
-	att="$(st "$n" guard_attempts)"; [[ -z "$att" || "$att" -le 3 ]] || fails+=("persisted guard_attempts=$att > 3")
+	att="$(st "$n" guard_attempts)"; [[ ! "$att" =~ ^[0-9]+$ || "$att" -le 3 ]] || fails+=("persisted guard_attempts=$att > 3")
 	max="$(grep -ho 'restore attempt [0-9]*/' "$R"/state/logs/deploy-*.log | tr -dc '0-9\n' | sort -n | tail -1)"
 	[[ -z "$max" || "$max" -le 3 ]] || fails+=("log reached attempt $max")
 	[[ "$(systemctl --user is-active "vpe-rh-guard-run-$n.timer" 2>/dev/null)" != active ]] || fails+=("guard timer still active")
@@ -56,6 +56,10 @@ add b2-corrupt-crash crash 18624; echo pause_at=swap >"$B/run-b2-corrupt-crash/f
 add b3-corrupt-guard new 18625; echo pause_at=checks >"$B/run-b3-corrupt-guard/faults"
 # --- new: (c) both
 add c1-both new 18626; echo pause_at=checks,restore >"$B/run-c1-both/faults"
+# --- paths around the attempt count
+add u1-unwritable new 18627; echo pause_at=checks >"$B/run-u1-unwritable/faults"
+add u2-count-garbage new 18628; echo pause_at=checks >"$B/run-u2-count-garbage/faults"
+add r1-kill-config-step new 18629; echo pause_at=checks,restore-config >"$B/run-r1-kill-config-step/faults"
 # --- earlier scenarios
 add f1-success new 18611
 add f2-crash crash 18612
@@ -76,10 +80,16 @@ echo "CONCURRENT: $(launch f1-success 2>&1) exit=$?"
 for n in b1-corrupt-badreq b2-corrupt-crash; do { paused $n swap && corrupt_backup $n && resume $n swap && echo "[$n] backup corrupted"; } & done
 { paused b3-corrupt-guard checks && corrupt_backup b3-corrupt-guard && kill_deploy b3-corrupt-guard && echo "[b3] backup corrupted, deploy killed"; } &
 { paused c1-both checks && corrupt_backup c1-both && kill_deploy c1-both && echo "[c1] backup corrupted, deploy killed" && kill_guard_restores c1-both 3; } &
+{ paused u1-unwritable checks && echo state_write_fails=1 >>"$B/run-u1-unwritable/faults" && kill_deploy u1-unwritable && echo "[u1] state writes now fail, deploy killed"; } &
+{ paused u2-count-garbage checks && sed -i 's/^guard_attempts=.*/guard_attempts=x/' "$B/run-u2-count-garbage/state/state" && kill_deploy u2-count-garbage && echo "[u2] guard_attempts=x, deploy killed"; } &
+{ paused r1-kill-config-step checks && kill_deploy r1-kill-config-step && paused r1-kill-config-step restore-config 60 &&
+	echo "[r1] guard paused at the config step of attempt $(st r1-kill-config-step guard_attempts); killing it, clearing faults" &&
+	kill_guard r1-kill-config-step KILL && : >"$B/run-r1-kill-config-step/faults"; } &
 for x in f4-kill-swap:swap f5-kill-checks:checks; do IFS=: read -r d p <<<"$x"; { paused "$d" "$p" && kill_deploy "$d" && echo "[$d] deploy killed at $p"; } & done
 wait
 
-for n in "${ALL[@]}"; do fin "$n" 300; done
+for n in "${ALL[@]}"; do [[ $n == u1-unwritable ]] || fin "$n" 300; done
+wait_for 120 "u1 guard timer stopped" "[[ \"\$(systemctl --user is-active vpe-rh-guard-run-u1-unwritable.timer)\" != active ]]"
 launch f1-success >/dev/null; sleep 3; echo "RERUN: $(tail -1 "$(ls -t "$B"/run-f1-success/state/logs/deploy-*.log | head -1)" | cut -c11-)"
 sleep 2
 echo
@@ -89,6 +99,16 @@ assert b1-corrupt-badreq old rolled-back "" edited "CONFIG RECOVERY INCOMPLETE"
 assert b2-corrupt-crash old rolled-back "" edited "CONFIG RECOVERY INCOMPLETE"
 assert b3-corrupt-guard old recovered "" edited "CONFIG RECOVERY INCOMPLETE"
 assert c1-both old needs-human old-serving edited "CONFIG NOT RESTORED"
+assert u2-count-garbage old needs-human old-serving original "found its attempt count unreadable"
+assert r1-kill-config-step old recovered "" original "guard restored"
+# u1: state writes fail, so no phase is recorded; check the rest by hand.
+u1R="$B/run-u1-unwritable"; u1pid="$(systemctl --user show vpe-fx-engine-u1-unwritable -p MainPID --value)"
+u1res="$(grep -h RESULT "$u1R"/state/logs/deploy-2*.log | tail -1)"
+if [[ "$(sha256sum /proc/$u1pid/exe | cut -d' ' -f1)" == "$OLD_SHA" && "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18627/healthz)" == 200 &&
+	"$u1res" == *"cannot write"*"SERVICE IS UP ON"* && "$(systemctl --user is-active vpe-rh-guard-run-u1-unwritable.timer)" != active &&
+	! -e "$UD/vpe-rh-guard-run-u1-unwritable.timer" && "$(grep -c 'restore attempt [0-9]' "$u1R"/state/logs/deploy-2*.log)" == 0 ]]; then
+	echo "PASS [u1-unwritable]"; else echo "FAIL [u1-unwritable]"; fi
+echo "    phase=$(phase u1-unwritable) (unchanged: state not writable)"; echo "    ${u1res:0:400}"
 assert f1-success new succeeded "" edited "already deployed"
 assert f2-crash old rolled-back "" original "rolled back"
 assert f3-badreq old rolled-back "" original "rolled back"
@@ -98,9 +118,9 @@ assert f6-rollback-fails old recovered "" original "guard restored"
 assert f7-runtime-limit old recovered "" original "guard restored"
 assert f8-restore-never candidate needs-human candidate-running edited "CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING"
 echo
-for n in a2-kill-final c1-both; do echo "--- guard log tail [$n]"; grep -h 'guard\|final\|RESULT\|CONFIG' "$B/run-$n"/state/logs/deploy-2*.log | cut -c1-220 | tail -9; done
+for n in a2-kill-final c1-both r1-kill-config-step u1-unwritable; do echo "--- guard log tail [$n]"; grep -h 'guard\|final\|RESULT\|CONFIG' "$B/run-$n"/state/logs/deploy-2*.log | cut -c1-220 | tail -9; done
 
 for n in "${ALL[@]}"; do teardown "$n"; done
 echo
 echo "leftover rehearsal units: $(systemctl --user list-units --all --no-legend 'vpe-fx-*' 'vpe-rh-*' | grep -vc 'not-found')"
-echo "leftover unit files: $(ls ~/.config/systemd/user | grep -c '^vpe-')"
+echo "leftover unit files: $(ls ~/.config/systemd/user ~/.config/systemd/user/timers.target.wants | grep -c '^vpe-')"

@@ -44,10 +44,10 @@
 #     request, then 30 s with the same PID and no restarts. Any non-200 from
 #     a real request rolls back, even a provider outage or rate limit: the
 #     status code cannot tell those from a proxy fault, because the proxy
-#     itself answers 429 (credentials cooling down, sdk/cliproxy/auth/
-#     selector.go) and 503 (credential unavailable, conductor_execution.go;
-#     routing, sdk/api/handlers/handlers_routing.go). The baseline on the old
-#     binary just before makes a provider fault at that moment unlikely.
+#     itself answers 429 when its credentials are cooling down
+#     (sdk/cliproxy/auth/selector.go) and 503 when a bound session credential
+#     is unavailable (sdk/cliproxy/auth/conductor_execution.go). The baseline
+#     on the old binary just before makes a provider fault then unlikely.
 #  7. On success: re-verifies the installed and running sha, records success,
 #     disarms the guard. On failure, rollback in this order: install the old
 #     binary, restart onto it and wait for /healthz, then put the config back,
@@ -104,7 +104,8 @@
 # VPE_REHEARSAL_DIR=/tmp/<dir> switches every path, unit name, guard name and
 # port to throwaway values read from <dir>/rehearsal.conf, and enables fault
 # hooks read from <dir>/faults (pause_at=<comma list of swap, checks,
-# restore, restore-config, final>, restore_fail_once=1, restore_fail_always=1).
+# restore, restore-config, final>, restore_fail_once=1, restore_fail_always=1,
+# state_write_fails=1).
 # It refuses to run if any of them resolves to
 # the live directory, unit or port. Without it, the pins below are constants
 # and no environment variable changes them.
@@ -195,6 +196,7 @@ pause_hook() { # rehearsal: stop here until the harness kills this unit or delet
 state_get() { [[ -f "$STATE" ]] && awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$STATE"; }
 state_set() { # key value [key value ...], atomic rewrite
 	local tmp="$STATE.tmp.$$" args=("$@")
+	if [[ "$(fault state_write_fails)" == 1 ]]; then log "  [rehearsal] injected failure: cannot write $STATE"; return 1; fi
 	{
 		[[ -f "$STATE" ]] && awk -F= -v keys="$(printf '%s ' "${args[@]}")" '
 			BEGIN { n = split(keys, a, " "); for (i = 1; i <= n; i += 2) skip[a[i]] = 1 }
@@ -437,24 +439,40 @@ restore_old() {
 	stable_for "$RESTORE_STABLE"
 }
 
-# Guard, once the attempt limit is used up. Runs on its own tick, at most once
-# (final_action is persisted before it starts, so a kill is not repeated): put
-# the old binary in place and start it, try the config, then record
-# needs-human with what is actually installed and running.
-guard_give_up() { # attempts
+# Guard's last step, at most once (final_action is persisted before it starts
+# when the state file is writable, so a kill is not repeated): put the old
+# binary in place and start it, try the config, then record needs-human with
+# what is actually installed and running, and disarm.
+guard_give_up() { # why
 	if [[ -z "$(state_get final_action)" ]]; then
 		state_set final_action started || guard_stop_unwritable
-		log "guard: $1 of $GUARD_ATTEMPTS restore attempts used; final action (runs once): install and start $OLD_VERSION"
+		log "guard: $1; final action (runs once): install and start $OLD_VERSION"
 		pause_hook final
-		if [[ "$(sha_of "$LIVE_BIN")" == "$OLD_SHA" ]] || { install_file "$BIN_BACKUP" "$LIVE_BIN" "$OLD_SHA" 755 && log "  restored $OLD_VERSION binary"; }; then
-			start_old && restore_config
-		else
-			log "  final action: could not install $OLD_VERSION"
-		fi
+		final_old_binary && restore_config
 		state_set final_action done
 	else
 		log "guard: the final action was cut off on an earlier tick (final_action=$(state_get final_action)); not repeating it"
 	fi
+	needs_human "$1, then made its final action"
+}
+
+# The state file cannot be written, so attempts cannot be counted. This run
+# disarms the guard, so the final action here is bounded too.
+guard_stop_unwritable() {
+	log "guard: cannot write $STATE, so restore attempts cannot be counted; final action, then the guard stops"
+	final_old_binary
+	needs_human "The guard cannot write $STATE, so it cannot count restore attempts; it made one final action and stopped"
+}
+
+final_old_binary() { # install the old binary if needed, then start it
+	if [[ "$(sha_of "$LIVE_BIN")" == "$OLD_SHA" ]] || { install_file "$BIN_BACKUP" "$LIVE_BIN" "$OLD_SHA" 755 && log "  restored $OLD_VERSION binary"; }; then
+		start_old
+	else
+		log "  final action: could not install $OLD_VERSION"; return 1
+	fi
+}
+
+needs_human() { # headline; measures what is installed and running, records, disarms, exits
 	local inst pid run hz cfg check svc
 	inst="$(sha_of "$LIVE_BIN")"; pid="$(unit_prop MainPID)"
 	run="$(sha_of "/proc/${pid:-0}/exe")"; hz="$(http_code "$BASE/healthz")"
@@ -470,14 +488,7 @@ guard_give_up() { # attempts
 	else cfg="CONFIG NOT RESTORED: sha differs from pre-deploy"; fi
 	state_set phase needs-human final_check "$check" finished "$(date -u +%FT%TZ)"
 	disarm_guard
-	log "RESULT: NEEDS A HUMAN. Guard used $1 of $GUARD_ATTEMPTS restore attempts and its final action. $svc. Installed sha ${inst:0:12} (old ${OLD_SHA:0:12}, new ${NEW_SHA:0:12}); $cfg. Old binary at $BIN_BACKUP; config backup $CONFIG_BACKUP"
-	exit 1
-}
-
-# The state file cannot be written, so attempts cannot be counted: stop.
-guard_stop_unwritable() {
-	disarm_guard
-	log "RESULT: NEEDS A HUMAN. The guard cannot write $STATE, so it cannot count restore attempts; it has stopped without restoring. Installed sha $(sha_of "$LIVE_BIN" | cut -c1-12), running sha $(sha_of "/proc/$(unit_prop MainPID)/exe" | cut -c1-12) (old ${OLD_SHA:0:12}); old binary at $BIN_BACKUP; config backup $CONFIG_BACKUP"
+	log "RESULT: NEEDS A HUMAN. $1. $svc. Installed sha ${inst:0:12} (old ${OLD_SHA:0:12}, new ${NEW_SHA:0:12}); $cfg. Old binary at $BIN_BACKUP; config backup $CONFIG_BACKUP"
 	exit 1
 }
 
@@ -650,10 +661,8 @@ cmd_guard() {
 	# state file before the next, so a killed or timed-out attempt still counts.
 	local attempts
 	attempts="$(state_get guard_attempts)"
-	if ! [[ "$attempts" =~ ^[0-9]+$ ]]; then
-		log "guard: attempt count unreadable; treating the limit as reached"; attempts=$GUARD_ATTEMPTS
-	fi
-	if (( attempts >= GUARD_ATTEMPTS )); then guard_give_up "$attempts"; fi
+	[[ "$attempts" =~ ^[0-9]+$ ]] || guard_give_up "The guard found its attempt count unreadable in $STATE"
+	(( attempts < GUARD_ATTEMPTS )) || guard_give_up "Guard used $attempts of $GUARD_ATTEMPTS restore attempts"
 	attempts=$((attempts + 1))
 	state_set guard_attempts "$attempts" && [[ "$(state_get guard_attempts)" == "$attempts" ]] || guard_stop_unwritable
 	log "guard: restore attempt $attempts/$GUARD_ATTEMPTS"

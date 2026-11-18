@@ -1,85 +1,111 @@
 CONCURRENT: REFUSED: a deploy is already running (lock held); nothing started exit=4
-[b2-corrupt-crash] backup corrupted
 [b1-corrupt-badreq] backup corrupted
-[f4-kill-swap] deploy killed at swap
+[b2-corrupt-crash] backup corrupted
+[u1] state writes now fail, deploy killed
 [b3] backup corrupted, deploy killed
-[f5-kill-checks] deploy killed at checks
 [c1] backup corrupted, deploy killed
+[u2] guard_attempts=x, deploy killed
+[f4-kill-swap] deploy killed at swap
+[f5-kill-checks] deploy killed at checks
+[r1] guard paused at the config step of attempt 1; killing it, clearing faults
 [a2-kill-final] guard paused in restore attempt 1; killing it (KILL)
 [a1-kill-restore] guard paused in restore attempt 1; killing it (KILL)
 [c1-both] guard paused in restore attempt 1; killing it (KILL)
 [a1-kill-restore] guard paused in restore attempt 2; killing it (TERM)
 [a2-kill-final] guard paused in restore attempt 2; killing it (TERM)
 [c1-both] guard paused in restore attempt 2; killing it (TERM)
-[a1-kill-restore] guard paused in restore attempt 3; killing it (KILL)
-[a2-kill-final] guard paused in restore attempt 3; killing it (KILL)
 [c1-both] guard paused in restore attempt 3; killing it (KILL)
+[a2-kill-final] guard paused in restore attempt 3; killing it (KILL)
+[a1-kill-restore] guard paused in restore attempt 3; killing it (KILL)
 [a2] guard paused in its final action; killing it
 RERUN: RESULT: already deployed; nothing changed
 
 PASS [a1-kill-restore]
     phase=needs-human attempts=3 final_action=done final_check=old-serving config_restored=yes running=3293d9e870c6 config=original
-    05:05:37Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts and its final action. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3129172, /healthz 200) but its restore did not complete its checks. Installed sha 3293d9e870c6 (old 3293d9e870c6, new 2eb74f482b74); config is the pre-deploy one. Old binary at /tmp/vpe-fx/run-a1-kill-restore/state/cli-proxy-api-plus.v8.0.64-rhys.2; config backup /tmp/vpe-
+    05:18:39Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts, then made its final action. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3218017, /healthz 200) but its restore did not complete its checks. Installed sha 3293d9e870c6 (old 3293d9e870c6, new 2eb74f482b74); config is the pre-deploy one. Old binary at /tmp/vpe-fx/run-a1-kill-restore/state/cli-proxy-api-plus.v8.0.64-rhys.2; config backup /t
 PASS [a2-kill-final]
     phase=needs-human attempts=3 final_action=started final_check=candidate-running config_restored= running=2eb74f482b74 config=edited
-    05:05:48Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts and its final action. CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING (pid 3121311, /healthz 200); v8.0.64-rhys.2 is NOT running. Installed sha 2eb74f482b74 (old 3293d9e870c6, new 2eb74f482b74); CONFIG NOT RESTORED: it still has the top-level claude: block this deploy added. Old binary at /tmp/vpe-fx/run-a2-kill-final/state/cli-proxy-ap
+    05:18:50Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts, then made its final action. CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING (pid 3209169, /healthz 200); v8.0.64-rhys.2 is NOT running. Installed sha 2eb74f482b74 (old 3293d9e870c6, new 2eb74f482b74); CONFIG NOT RESTORED: it still has the top-level claude: block this deploy added. Old binary at /tmp/vpe-fx/run-a2-kill-final/state/cli-p
 PASS [b1-corrupt-badreq]
     phase=rolled-back attempts=0 final_action= final_check= config_restored=no running=3293d9e870c6 config=edited
-    05:05:04Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-fx/run-b1-corrupt-badreq/cand/cli-proxy-api-plus.v8.0.77-rhys.1. CONFIG RECOVERY INCOMPLETE: /tmp/vpe-fx/run-b1-corrupt-badreq/live/merged-config.yaml: it still has the top-level claude: block (server-side-fallback: true) this deploy added; restoring it from /tmp/vpe-fx/run-b1-corrupt-badreq/state/merged-
+    05:18:09Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-fx/run-b1-corrupt-badreq/cand/cli-proxy-api-plus.v8.0.77-rhys.1. CONFIG RECOVERY INCOMPLETE: /tmp/vpe-fx/run-b1-corrupt-badreq/live/merged-config.yaml: it still has the top-level claude: block (server-side-fallback: true) this deploy added; restoring it from /tmp/vpe-fx/run-b1-corrupt-badreq/state/merged-
 PASS [b2-corrupt-crash]
     phase=rolled-back attempts=0 final_action= final_check= config_restored=no running=3293d9e870c6 config=edited
-    05:06:05Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-fx/run-b2-corrupt-crash/cand/cli-proxy-api-plus.v8.0.77-rhys.1. CONFIG RECOVERY INCOMPLETE: /tmp/vpe-fx/run-b2-corrupt-crash/live/merged-config.yaml: it still has the top-level claude: block (server-side-fallback: true) this deploy added; restoring it from /tmp/vpe-fx/run-b2-corrupt-crash/state/merged-con
+    05:19:07Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-fx/run-b2-corrupt-crash/cand/cli-proxy-api-plus.v8.0.77-rhys.1. CONFIG RECOVERY INCOMPLETE: /tmp/vpe-fx/run-b2-corrupt-crash/live/merged-config.yaml: it still has the top-level claude: block (server-side-fallback: true) this deploy added; restoring it from /tmp/vpe-fx/run-b2-corrupt-crash/state/merged-con
 PASS [b3-corrupt-guard]
     phase=recovered attempts=1 final_action= final_check= config_restored=no running=3293d9e870c6 config=edited
-    05:05:15Z RESULT: guard restored v8.0.64-rhys.2; live and healthy. CONFIG RECOVERY INCOMPLETE: /tmp/vpe-fx/run-b3-corrupt-guard/live/merged-config.yaml: it still has the top-level claude: block (server-side-fallback: true) this deploy added; restoring it from /tmp/vpe-fx/run-b3-corrupt-guard/state/merged-config.yaml.before failed (pre-deploy sha f4923a0fa69e); v8.0.64-rhys.2 runs with it as it is
+    05:18:17Z RESULT: guard restored v8.0.64-rhys.2; live and healthy. CONFIG RECOVERY INCOMPLETE: /tmp/vpe-fx/run-b3-corrupt-guard/live/merged-config.yaml: it still has the top-level claude: block (server-side-fallback: true) this deploy added; restoring it from /tmp/vpe-fx/run-b3-corrupt-guard/state/merged-config.yaml.before failed (pre-deploy sha f4923a0fa69e); v8.0.64-rhys.2 runs with it as it is
 PASS [c1-both]
     phase=needs-human attempts=3 final_action=done final_check=old-serving config_restored=no running=3293d9e870c6 config=edited
-    05:05:37Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts and its final action. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3129176, /healthz 200) but its restore did not complete its checks. Installed sha 3293d9e870c6 (old 3293d9e870c6, new 2eb74f482b74); CONFIG NOT RESTORED: it still has the top-level claude: block this deploy added. Old binary at /tmp/vpe-fx/run-c1-both/state/cli-proxy-api-p
+    05:18:39Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts, then made its final action. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3218023, /healthz 200) but its restore did not complete its checks. Installed sha 3293d9e870c6 (old 3293d9e870c6, new 2eb74f482b74); CONFIG NOT RESTORED: it still has the top-level claude: block this deploy added. Old binary at /tmp/vpe-fx/run-c1-both/state/cli-prox
+PASS [u2-count-garbage]
+    phase=needs-human attempts=x final_action=done final_check=old-serving config_restored=yes running=3293d9e870c6 config=original
+    05:18:09Z RESULT: NEEDS A HUMAN. The guard found its attempt count unreadable in /tmp/vpe-fx/run-u2-count-garbage/state/state, then made its final action. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3214379, /healthz 200) but its restore did not complete its checks. Installed sha 3293d9e870c6 (old 3293d9e870c6, new 2eb74f482b74); config is the pre-deploy one. Old binary at /tmp/vpe-fx/run-u2-count-garbag
+PASS [r1-kill-config-step]
+    phase=recovered attempts=2 final_action= final_check= config_restored=yes running=3293d9e870c6 config=original
+    05:18:27Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+PASS [u1-unwritable]
+    phase=swapped (unchanged: state not writable)
+    05:18:06Z RESULT: NEEDS A HUMAN. The guard cannot write /tmp/vpe-fx/run-u1-unwritable/state/state, so it cannot count restore attempts; it made one final action and stopped. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3214299, /healthz 200) but its restore did not complete its checks. Installed sha 3293d9e870c6 (old 3293d9e870c6, new 2eb74f482b74); CONFIG NOT RESTORED: it still has the top-level claude: 
 PASS [f1-success]
     phase=succeeded attempts=0 final_action= final_check= config_restored= running=2eb74f482b74 config=edited
-    05:06:05Z RESULT: already deployed; nothing changed
+    05:19:08Z RESULT: already deployed; nothing changed
 PASS [f2-crash]
     phase=rolled-back attempts=0 final_action= final_check= config_restored=yes running=3293d9e870c6 config=original
-    05:06:03Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-fx/run-f2-crash/cand/cli-proxy-api-plus.v8.0.77-rhys.1
+    05:19:04Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-fx/run-f2-crash/cand/cli-proxy-api-plus.v8.0.77-rhys.1
 PASS [f3-badreq]
     phase=rolled-back attempts=0 final_action= final_check= config_restored=yes running=3293d9e870c6 config=original
-    05:05:06Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-fx/run-f3-badreq/cand/cli-proxy-api-plus.v8.0.77-rhys.1
+    05:18:08Z RESULT: rolled back; v8.0.64-rhys.2 is live and healthy. Candidate left at /tmp/vpe-fx/run-f3-badreq/cand/cli-proxy-api-plus.v8.0.77-rhys.1
 PASS [f4-kill-swap]
     phase=recovered attempts=1 final_action= final_check= config_restored=yes running=3293d9e870c6 config=original
-    05:05:15Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+    05:18:17Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
 PASS [f5-kill-checks]
     phase=recovered attempts=1 final_action= final_check= config_restored=yes running=3293d9e870c6 config=original
-    05:05:15Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+    05:18:19Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
 PASS [f6-rollback-fails]
     phase=recovered attempts=1 final_action= final_check= config_restored=yes running=3293d9e870c6 config=original
-    05:05:15Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+    05:18:19Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
 PASS [f7-runtime-limit]
     phase=recovered attempts=1 final_action= final_check= config_restored=yes running=3293d9e870c6 config=original
-    05:05:35Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+    05:18:37Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
 PASS [f8-restore-never]
     phase=needs-human attempts=3 final_action=done final_check=candidate-running config_restored= running=df09bdcad2e5 config=edited
-    05:05:35Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts and its final action. CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING (pid 3123886, /healthz 200); v8.0.64-rhys.2 is NOT running. Installed sha 3293d9e870c6 (old 3293d9e870c6, new df09bdcad2e5); CONFIG NOT RESTORED: it still has the top-level claude: block this deploy added. Old binary at /tmp/vpe-fx/run-f8-restore-never/state/cli-proxy
+    05:18:37Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts, then made its final action. CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING (pid 3212519, /healthz 200); v8.0.64-rhys.2 is NOT running. Installed sha 3293d9e870c6 (old 3293d9e870c6, new df09bdcad2e5); CONFIG NOT RESTORED: it still has the top-level claude: block this deploy added. Old binary at /tmp/vpe-fx/run-f8-restore-never/state/cl
 
 --- guard log tail [a2-kill-final]
-05:05:26Z guard: deploy unit vpe-rh-deploy-1794978289-3120462 is inactive and phase=swapped (no success recorded)
-05:05:26Z guard: restore attempt 3/3
-05:05:36Z guard: deploy unit vpe-rh-deploy-1794978289-3120462 is inactive and phase=swapped (no success recorded)
-05:05:36Z guard: 3 of 3 restore attempts used; final action (runs once): install and start v8.0.64-rhys.2
-05:05:36Z   [rehearsal] paused at final
-05:05:48Z guard: deploy unit vpe-rh-deploy-1794978289-3120462 is inactive and phase=swapped (no success recorded)
-05:05:48Z guard: the final action was cut off on an earlier tick (final_action=started); not repeating it
-05:05:48Z   guard disarmed
-05:05:48Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts and its final action. CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING (pid 3121311, /healthz 200); v8.0.64-rhys.2 is NOT running. Installed sha 2eb74f482b74 (
+05:18:28Z guard: deploy unit vpe-rh-deploy-1794979070-3207942 is inactive and phase=swapped (no success recorded)
+05:18:28Z guard: restore attempt 3/3
+05:18:39Z guard: deploy unit vpe-rh-deploy-1794979070-3207942 is inactive and phase=swapped (no success recorded)
+05:18:39Z guard: Guard used 3 of 3 restore attempts; final action (runs once): install and start v8.0.64-rhys.2
+05:18:39Z   [rehearsal] paused at final
+05:18:50Z guard: deploy unit vpe-rh-deploy-1794979070-3207942 is inactive and phase=swapped (no success recorded)
+05:18:50Z guard: the final action was cut off on an earlier tick (final_action=started); not repeating it
+05:18:50Z   guard disarmed
+05:18:50Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts, then made its final action. CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING (pid 3209169, /healthz 200); v8.0.64-rhys.2 is NOT running. Installed sha 2eb74f4
 --- guard log tail [c1-both]
-05:05:15Z guard: deploy unit vpe-rh-deploy-1794978290-3121102 is inactive and phase=swapped (no success recorded)
-05:05:15Z guard: restore attempt 2/3
-05:05:26Z guard: deploy unit vpe-rh-deploy-1794978290-3121102 is inactive and phase=swapped (no success recorded)
-05:05:26Z guard: restore attempt 3/3
-05:05:36Z guard: deploy unit vpe-rh-deploy-1794978290-3121102 is inactive and phase=swapped (no success recorded)
-05:05:36Z guard: 3 of 3 restore attempts used; final action (runs once): install and start v8.0.64-rhys.2
-05:05:36Z   CONFIG RECOVERY INCOMPLETE: /tmp/vpe-fx/run-c1-both/live/merged-config.yaml: it still has the top-level claude: block (server-side-fallback: true) this deploy added; restoring it from /tmp/vpe-fx/run-c1-both/
-05:05:37Z   guard disarmed
-05:05:37Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts and its final action. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3129176, /healthz 200) but its restore did not complete its checks. Installed sha 3293d9e870c
+05:18:17Z guard: deploy unit vpe-rh-deploy-1794979071-3208915 is inactive and phase=swapped (no success recorded)
+05:18:17Z guard: restore attempt 2/3
+05:18:28Z guard: deploy unit vpe-rh-deploy-1794979071-3208915 is inactive and phase=swapped (no success recorded)
+05:18:28Z guard: restore attempt 3/3
+05:18:39Z guard: deploy unit vpe-rh-deploy-1794979071-3208915 is inactive and phase=swapped (no success recorded)
+05:18:39Z guard: Guard used 3 of 3 restore attempts; final action (runs once): install and start v8.0.64-rhys.2
+05:18:39Z   CONFIG RECOVERY INCOMPLETE: /tmp/vpe-fx/run-c1-both/live/merged-config.yaml: it still has the top-level claude: block (server-side-fallback: true) this deploy added; restoring it from /tmp/vpe-fx/run-c1-both/
+05:18:39Z   guard disarmed
+05:18:39Z RESULT: NEEDS A HUMAN. Guard used 3 of 3 restore attempts, then made its final action. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3218023, /healthz 200) but its restore did not complete its checks. Installed sha 3293
+--- guard log tail [r1-kill-config-step]
+05:17:54Z backups in /tmp/vpe-fx/run-r1-kill-config-step/state; guard vpe-rh-guard-run-r1-kill-config-step.timer armed (deadline 05:33:23Z)
+05:18:06Z guard: deploy unit vpe-rh-deploy-1794979072-3209500 is inactive and phase=swapped (no success recorded)
+05:18:06Z guard: restore attempt 1/3
+05:18:16Z guard: deploy unit vpe-rh-deploy-1794979072-3209500 is inactive and phase=swapped (no success recorded)
+05:18:17Z guard: restore attempt 2/3
+05:18:27Z   guard disarmed
+05:18:27Z RESULT: guard restored v8.0.64-rhys.2; live and healthy
+--- guard log tail [u1-unwritable]
+05:17:53Z backups in /tmp/vpe-fx/run-u1-unwritable/state; guard vpe-rh-guard-run-u1-unwritable.timer armed (deadline 05:33:22Z)
+05:18:06Z guard: deploy unit vpe-rh-deploy-1794979071-3209116 is inactive and phase=swapped (no success recorded)
+05:18:06Z guard: cannot write /tmp/vpe-fx/run-u1-unwritable/state/state, so restore attempts cannot be counted; final action, then the guard stops
+05:18:06Z   guard disarmed
+05:18:06Z RESULT: NEEDS A HUMAN. The guard cannot write /tmp/vpe-fx/run-u1-unwritable/state/state, so it cannot count restore attempts; it made one final action and stopped. SERVICE IS UP ON v8.0.64-rhys.2 (pid 3214299, 
 
 leftover rehearsal units: 0
 leftover unit files: 0

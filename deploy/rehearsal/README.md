@@ -26,10 +26,11 @@ Fault hooks (rehearsal only, from `<dir>/faults`): `pause_at=` a comma list of
 `final` (the guard's final action); a paused run waits up to 300 s, until the
 harness kills its unit or deletes `<dir>/paused-<point>`. `restore_fail_once=1`
 and `restore_fail_always=1` make the restart onto the old binary fail (shared by
-restorations and the final action). `runtime_max=` in `rehearsal.conf` shortens
+restorations and the final action); `state_write_fails=1` makes every state
+write fail. `runtime_max=` in `rehearsal.conf` shortens
 RuntimeMaxSec.
 
-## Results (2026-11-18, `final-pass.out`): 14 of 14 pass
+## Results (2026-11-18, `final-pass.out`): 17 of 17 pass
 
 Each row asserts the running sha, /healthz, phase, `final_check`, config,
 persisted `guard_attempts` <= 3, no "attempt 4" in the log, guard timer
@@ -43,6 +44,9 @@ inactive, guard unit files gone, no secret in logs or state, no temp key files.
 | b2: config backup corrupted, candidate crashes at start | old started and serving; same note | rolled-back, config_restored=no |
 | b3: config backup corrupted, deploy killed during checks | guard attempt 1 restores old; same note | recovered, config_restored=no |
 | c1: corrupted backup and guard killed in 3 restorations | final action put old back; config not restored, said so | needs-human, final_check=old-serving |
+| u1: state writes fail after the deploy is killed | guard cannot count, so it makes its final action and stops: old serving, log says why | (state unwritable), guard gone |
+| u2: attempt count unreadable (`guard_attempts=x`) | treated as the limit: final action, old serving, config original | needs-human, final_check=old-serving |
+| r1: guard killed at the config step of attempt 1 | attempt 2 finds old running, restores config | recovered, guard_attempts=2 |
 | clean success; second deploy while one runs; re-run after success | new serving; refused (exit 4); "already deployed" | succeeded |
 | candidate crashes at start | old serving, config original | rolled-back |
 | candidate fails the real-request check | old serving, no body logged | rolled-back |
