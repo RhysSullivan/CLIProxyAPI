@@ -332,6 +332,8 @@ arm_guard() { # frozen_script
 }
 
 disarm_guard() {
+	# A killed deploy can leave its key-header and response-body temp files.
+	rm -f "$STATE_DIR"/.h-bearer.* "$STATE_DIR"/.h-xkey.* "$STATE_DIR"/.body.*
 	sc disable --now "$GUARD.timer" >/dev/null 2>&1
 	rm -f "$UNIT_DIR/$GUARD.timer" "$UNIT_DIR/$GUARD.service"
 	sc daemon-reload
