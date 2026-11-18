@@ -11,15 +11,20 @@ The engine is a stand-in (`standin/main.go`), built once per behaviour so
 each is a distinct ELF with its own sha: `old` and `new` answer every check;
 `crash` exits at start; `badreq` answers `/healthz`, `/v1/models` and
 `/pool/usage` but returns 502 with a secret-shaped body to the real-request
-checks. No request reaches a provider. The stand-in ignores config keys, so
+checks; `oldslow` is `old` that waits 8 s before listening. Like the engine
+(v8.0.64 `sdk/cliproxy/service_lifecycle.go` starts the file watcher only after
+the server listens), the stand-in adds its config watch 5 s after it starts
+answering, and `/standin/config` reports the sha of the config it has loaded.
+No request reaches a provider. The stand-in ignores config keys, so
 the config scenarios prove the script's flow only; that the real v8.0.64-rhys.2
 accepts the edited config was established in an earlier session, not here.
 
     mkdir -p /tmp/vpe-fx/stub && cp standin/* /tmp/vpe-fx/stub/ && cd /tmp/vpe-fx/stub
-    for m in old:v8.0.64-rhys.2:good new:v8.0.77-rhys.1:good crash:v8.0.77-rhys.1:crash badreq:v8.0.77-rhys.1:badreq; do
-      IFS=: read n v mode <<<"$m"; CGO_ENABLED=0 go build -trimpath -ldflags "-X main.Version=$v -X main.Mode=$mode" -o bin-$n .; done
-    cp ../../harness.sh ../../final-pass.sh /tmp/vpe-fx/   # from deploy/rehearsal
+    for m in old:v8.0.64-rhys.2:good:0 oldslow:v8.0.64-rhys.2:good:8 new:v8.0.77-rhys.1:good:0 crash:v8.0.77-rhys.1:crash:0 badreq:v8.0.77-rhys.1:badreq:0; do
+      IFS=: read n v mode d <<<"$m"; CGO_ENABLED=0 go build -trimpath -ldflags "-X main.Version=$v -X main.Mode=$mode -X main.StartDelay=$d" -o bin-$n .; done
+    cp ../../harness.sh ../../probes.sh ../../probes-only.sh ../../final-pass.sh /tmp/vpe-fx/   # from deploy/rehearsal
     /tmp/vpe-fx/final-pass.sh
+    VPE_SCRIPT=<other copy of the script> /tmp/vpe-fx/probes-only.sh   # the p1/p2 probes alone
 
 Fault hooks (rehearsal only, from `<dir>/faults`): `pause_at=` a comma list of
 `swap`, `checks`, `restore` (top of every restoration), `restore-config`,
@@ -30,7 +35,13 @@ restorations and the final action); `state_write_fails=1` makes every state
 write fail. `runtime_max=` in `rehearsal.conf` shortens
 RuntimeMaxSec.
 
-## Results (2026-11-18, `final-pass.out`): 17 of 17 pass
+## Results (2026-11-17 PST, `final-pass.out`): 20 of 20 pass
+
+The p1/p2 probes were also run against the pre-fix script (6f3a0e1c) and
+fail there as expected (`prefix-probes.out`): its final action ran twice when
+state writes were blocked and the guard was killed during old-engine startup,
+and after both a rollback and a guard recovery the old stand-in was running
+the edited config, not the restored one.
 
 Each row asserts the running sha, /healthz, phase, `final_check`, config,
 persisted `guard_attempts` <= 3, no "attempt 4" in the log, guard timer
@@ -46,14 +57,17 @@ inactive, guard unit files gone, no secret in logs or state, no temp key files.
 | c1: corrupted backup and guard killed in 3 restorations | final action put old back; config not restored, said so | needs-human, final_check=old-serving |
 | u1: state writes fail after the deploy is killed | guard cannot count, so it makes its final action and stops: old serving, log says why | (state unwritable), guard gone |
 | u2: attempt count unreadable (`guard_attempts=x`) | treated as the limit: final action, old serving, config original | needs-human, final_check=old-serving |
-| r1: guard killed at the config step of attempt 1 | attempt 2 finds old running, restores config | recovered, guard_attempts=2 |
+| r1: guard killed at the config step of attempt 1 (before the old binary starts) | attempt 2 restores config, starts old | recovered, guard_attempts=2 |
 | clean success; second deploy while one runs; re-run after success | new serving; refused (exit 4); "already deployed" | succeeded |
 | candidate crashes at start | old serving, config original | rolled-back |
 | candidate fails the real-request check | old serving, no body logged | rolled-back |
 | SIGKILL right after the swap / during the health checks | old serving | recovered (guard) |
 | rollback restart fails once | old serving | recovered (guard, attempt 1) |
 | RuntimeMaxSec cuts a hung deploy (SIGTERM) | old serving | recovered (guard) |
-| restart onto old always fails | 3 attempts + final action fail; candidate still running, log says so | needs-human, final_check=candidate-running |
+| restart onto old always fails | 3 attempts + final action fail; candidate still running (on the restored config, so without the fallback key), log says so | needs-human, final_check=candidate-running |
+| p1: state writes fail, deploy killed, guard killed while the old engine starts | guard disarmed before its final action, so it ran once; old serving; RESULT says the action may be cut off | (state unwritable), guard gone |
+| p2a: candidate fails real requests, rollback in the deploy shell | old serving the restored config; picks up a later rename write and in-place write | rolled-back |
+| p2b: deploy killed during checks, guard restores | same as p2a | recovered |
 
 Not rehearsed: the user manager itself dying mid-deploy. The guard is an
 enabled unit-file pair so it should come back with the manager, and the
