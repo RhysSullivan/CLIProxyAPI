@@ -1,24 +1,106 @@
 #!/usr/bin/env bash
-cd /tmp/vpe-dfx && source harness.sh
-rm -rf /tmp/vpe-dfx/run-*
-fin() { wait_for "$2" "$1 final" "[[ \"\$(awk -F= '\$1==\"phase\"{print \$2}' /tmp/vpe-dfx/run-$1/state/state 2>/dev/null)\" =~ ^(succeeded|rolled-back|recovered|needs-human)\$ ]]"; }
-setup f1-success new 18411
-setup f2-crash crash 18412
-setup f3-badreq badreq 18413
-setup f4-kill-swap new 18414; echo pause_at=swap > run-f4-kill-swap/faults
-setup f5-kill-checks new 18415; echo pause_at=checks > run-f5-kill-checks/faults
-setup f6-rollback-fails badreq 18416; echo restore_fail_once=1 > run-f6-rollback-fails/faults
-setup f7-runtime-limit new 18417; echo pause_at=checks > run-f7-runtime-limit/faults; echo runtime_max=25 >> run-f7-runtime-limit/rehearsal.conf
-for n in f1-success f2-crash f3-badreq f4-kill-swap f5-kill-checks f6-rollback-fails f7-runtime-limit; do launch $n >/dev/null; done
-wait_for 60 "f1 swapped" '[[ "$(awk -F= '"'"'$1=="phase"{print $2}'"'"' /tmp/vpe-dfx/run-f1-success/state/state 2>/dev/null)" == swapped ]]'
+# Full rehearsal pass. Every scenario runs at once, each with its own unit,
+# port and guard; each ends with PASS/FAIL lines from assert().
+cd "${VPE_FX_BASE:-/tmp/vpe-fx}" && source ./harness.sh
+rm -rf "$B"/run-*
+
+# assert name serving(old|new|candidate) phase final_check config(original|edited) [result-substring]
+assert() {
+	local n="$1" R="$B/run-$1" want_run="$2" want_phase="$3" want_check="$4" want_cfg="$5" want_res="${6:-}"
+	local pid exe want port fails=() att max cfg res
+	port="$(awk -F= '$1=="port"{print $2}' "$R/rehearsal.conf")"
+	pid="$(systemctl --user show "vpe-fx-engine-$n" -p MainPID --value)"
+	exe="$(sha256sum "/proc/$pid/exe" 2>/dev/null | cut -d' ' -f1)"
+	case "$want_run" in old) want="$OLD_SHA" ;; *) want="$(awk -F= '$1=="new_sha"{print $2}' "$R/rehearsal.conf")" ;; esac
+	[[ "$exe" == "$want" ]] || fails+=("running ${exe:0:12} not $want_run")
+	if [[ "$want_run" != candidate ]]; then
+		[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$port/healthz")" == 200 ]] || fails+=("healthz not 200")
+	fi
+	[[ "$(phase "$n")" == "$want_phase" ]] || fails+=("phase $(phase "$n") not $want_phase")
+	[[ "$(st "$n" final_check)" == "$want_check" ]] || fails+=("final_check '$(st "$n" final_check)' not '$want_check'")
+	[[ "$(sha256sum "$R/live/merged-config.yaml" | cut -d' ' -f1)" == "$(cat "$R/config.sha0")" ]] && cfg=original || cfg=edited
+	[[ "$cfg" == "$want_cfg" ]] || fails+=("config $cfg not $want_cfg")
+	att="$(st "$n" guard_attempts)"; [[ -z "$att" || "$att" -le 3 ]] || fails+=("persisted guard_attempts=$att > 3")
+	max="$(grep -ho 'restore attempt [0-9]*/' "$R"/state/logs/deploy-*.log | tr -dc '0-9\n' | sort -n | tail -1)"
+	[[ -z "$max" || "$max" -le 3 ]] || fails+=("log reached attempt $max")
+	[[ "$(systemctl --user is-active "vpe-rh-guard-run-$n.timer" 2>/dev/null)" != active ]] || fails+=("guard timer still active")
+	[[ ! -e "$UD/vpe-rh-guard-run-$n.timer" && ! -e "$UD/vpe-rh-guard-run-$n.service" ]] || fails+=("guard unit files left")
+	[[ "$(grep -rl 'STANDIN-SECRET\|rehearsal-fake-key' "$R/state/state" "$R/state/logs" 2>/dev/null | wc -l)" == 0 ]] || fails+=("secret in state/logs")
+	[[ -z "$(ls "$R"/state/.h-* "$R"/state/.body.* 2>/dev/null)" ]] || fails+=("temp key/body files left")
+	res="$(grep -h 'RESULT' "$R"/state/logs/deploy-2*.log | tail -1)"
+	[[ -z "$want_res" || "$res" == *"$want_res"* ]] || fails+=("RESULT lacks '$want_res'")
+	[[ "$(tail -1 "$(ls -t "$R"/state/logs/deploy-2*.log | tail -1)")" == *RESULT* ]] || fails+=("first deploy log does not end with RESULT")
+	if ((${#fails[@]})); then echo "FAIL [$n]: ${fails[*]}"; else echo "PASS [$n]"; fi
+	echo "    phase=$(phase "$n") attempts=${att:-0} final_action=$(st "$n" final_action) final_check=$(st "$n" final_check) config_restored=$(st "$n" config_restored) running=${exe:0:12} config=$cfg"
+	echo "    ${res:0:400}"
+}
+
+# Kill the guard each time it pauses in a restoration, alternating SIGKILL and SIGTERM.
+kill_guard_restores() { # name times
+	local i
+	for ((i = 1; i <= $2; i++)); do
+		paused "$1" restore 60 || return 1
+		echo "[$1] guard paused in restore attempt $(st "$1" guard_attempts); killing it ($( ((i % 2)) && echo KILL || echo TERM))"
+		((i % 2)) && kill_guard "$1" KILL || kill_guard "$1" TERM
+	done
+}
+
+ALL=()
+add() { ALL+=("$1"); setup "$@"; }
+# --- new: (a) guard killed during restorations
+add a1-kill-restore new 18621; echo pause_at=checks,restore >"$B/run-a1-kill-restore/faults"
+add a2-kill-final new 18622; echo pause_at=checks,restore,final >"$B/run-a2-kill-final/faults"
+# --- new: (b) corrupted config backup
+add b1-corrupt-badreq badreq 18623; echo pause_at=swap >"$B/run-b1-corrupt-badreq/faults"
+add b2-corrupt-crash crash 18624; echo pause_at=swap >"$B/run-b2-corrupt-crash/faults"
+add b3-corrupt-guard new 18625; echo pause_at=checks >"$B/run-b3-corrupt-guard/faults"
+# --- new: (c) both
+add c1-both new 18626; echo pause_at=checks,restore >"$B/run-c1-both/faults"
+# --- earlier scenarios
+add f1-success new 18611
+add f2-crash crash 18612
+add f3-badreq badreq 18613
+add f4-kill-swap new 18614; echo pause_at=swap >"$B/run-f4-kill-swap/faults"
+add f5-kill-checks new 18615; echo pause_at=checks >"$B/run-f5-kill-checks/faults"
+add f6-rollback-fails badreq 18616; echo restore_fail_once=1 >"$B/run-f6-rollback-fails/faults"
+add f7-runtime-limit new 18617; echo pause_at=checks >"$B/run-f7-runtime-limit/faults"; echo runtime_max=25 >>"$B/run-f7-runtime-limit/rehearsal.conf"
+add f8-restore-never badreq 18618; echo restore_fail_always=1 >"$B/run-f8-restore-never/faults"
+
+for n in "${ALL[@]}"; do launch "$n" >/dev/null; done
+wait_for 60 "f1 swapped" "[[ \"\$(awk -F= '\$1==\"phase\"{print \$2}' $B/run-f1-success/state/state 2>/dev/null)\" == swapped ]]"
 echo "CONCURRENT: $(launch f1-success 2>&1) exit=$?"
-for x in f4-kill-swap:swap f5-kill-checks:checks; do IFS=: read d p <<<"$x"; wait_for 90 "$d paused" "[[ -f /tmp/vpe-dfx/run-$d/paused-$p ]]"; systemctl --user kill --signal=KILL "$(awk -F= '$1=="deploy_unit"{print $2}' run-$d/state/state)"; echo "KILLED $d at $p"; done
-for n in f1-success f2-crash f3-badreq f4-kill-swap f5-kill-checks f6-rollback-fails f7-runtime-limit; do fin $n 200; done
-launch f1-success >/dev/null; sleep 3; echo "RERUN: $(tail -1 "$(ls -t run-f1-success/state/logs/deploy-*.log | head -1)")"
-sleep 1
-for n in f1-success f2-crash f3-badreq f4-kill-swap f5-kill-checks f6-rollback-fails f7-runtime-limit; do
-  [[ $n == f1-success ]] && e=new || e=old
-  report $n $e | sed -n '1,9p'; echo "result: $(grep RESULT run-$n/state/logs/deploy-2*.log | tail -1 | cut -c1-150)"; echo
-done
-for n in f1-success f2-crash f3-badreq f4-kill-swap f5-kill-checks f6-rollback-fails f7-runtime-limit; do teardown $n; done
-echo "leftover rehearsal units: $(systemctl --user list-units --all --no-legend 'vpe-*' | wc -l); unit files: $(ls ~/.config/systemd/user | grep -c '^vpe-')"
+
+{ paused a1-kill-restore checks && kill_deploy a1-kill-restore && kill_guard_restores a1-kill-restore 3; } &
+{ paused a2-kill-final checks && kill_deploy a2-kill-final && kill_guard_restores a2-kill-final 3 &&
+	paused a2-kill-final final 60 && echo "[a2] guard paused in its final action; killing it" && kill_guard a2-kill-final KILL; } &
+for n in b1-corrupt-badreq b2-corrupt-crash; do { paused $n swap && corrupt_backup $n && resume $n swap && echo "[$n] backup corrupted"; } & done
+{ paused b3-corrupt-guard checks && corrupt_backup b3-corrupt-guard && kill_deploy b3-corrupt-guard && echo "[b3] backup corrupted, deploy killed"; } &
+{ paused c1-both checks && corrupt_backup c1-both && kill_deploy c1-both && echo "[c1] backup corrupted, deploy killed" && kill_guard_restores c1-both 3; } &
+for x in f4-kill-swap:swap f5-kill-checks:checks; do IFS=: read -r d p <<<"$x"; { paused "$d" "$p" && kill_deploy "$d" && echo "[$d] deploy killed at $p"; } & done
+wait
+
+for n in "${ALL[@]}"; do fin "$n" 300; done
+launch f1-success >/dev/null; sleep 3; echo "RERUN: $(tail -1 "$(ls -t "$B"/run-f1-success/state/logs/deploy-*.log | head -1)" | cut -c11-)"
+sleep 2
+echo
+assert a1-kill-restore old needs-human old-serving original "SERVICE IS UP ON v8.0.64-rhys.2"
+assert a2-kill-final candidate needs-human candidate-running edited "CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING"
+assert b1-corrupt-badreq old rolled-back "" edited "CONFIG RECOVERY INCOMPLETE"
+assert b2-corrupt-crash old rolled-back "" edited "CONFIG RECOVERY INCOMPLETE"
+assert b3-corrupt-guard old recovered "" edited "CONFIG RECOVERY INCOMPLETE"
+assert c1-both old needs-human old-serving edited "CONFIG NOT RESTORED"
+assert f1-success new succeeded "" edited "already deployed"
+assert f2-crash old rolled-back "" original "rolled back"
+assert f3-badreq old rolled-back "" original "rolled back"
+assert f4-kill-swap old recovered "" original "guard restored"
+assert f5-kill-checks old recovered "" original "guard restored"
+assert f6-rollback-fails old recovered "" original "guard restored"
+assert f7-runtime-limit old recovered "" original "guard restored"
+assert f8-restore-never candidate needs-human candidate-running edited "CANDIDATE v8.0.77-rhys.1 IS STILL RUNNING"
+echo
+for n in a2-kill-final c1-both; do echo "--- guard log tail [$n]"; grep -h 'guard\|final\|RESULT\|CONFIG' "$B/run-$n"/state/logs/deploy-2*.log | cut -c1-220 | tail -9; done
+
+for n in "${ALL[@]}"; do teardown "$n"; done
+echo
+echo "leftover rehearsal units: $(systemctl --user list-units --all --no-legend 'vpe-fx-*' 'vpe-rh-*' | grep -vc 'not-found')"
+echo "leftover unit files: $(ls ~/.config/systemd/user | grep -c '^vpe-')"

@@ -41,11 +41,30 @@
 #     the candidate by copy-beside-and-rename and restarts the engine.
 #  6. Checks the new process: unit active, /proc/PID/exe sha is the candidate,
 #     /healthz, /v1/models, /pool/usage, one real Claude and one real Codex
-#     request, then 30 s with the same PID and no restarts.
+#     request, then 30 s with the same PID and no restarts. Any non-200 from
+#     a real request rolls back, even a provider outage or rate limit: the
+#     status code cannot tell those from a proxy fault, because the proxy
+#     itself answers 429 (credentials cooling down, sdk/cliproxy/auth/
+#     selector.go) and 503 (credential unavailable, conductor_execution.go;
+#     routing, sdk/api/handlers/handlers_routing.go). The baseline on the old
+#     binary just before makes a provider fault at that moment unlikely.
 #  7. On success: re-verifies the installed and running sha, records success,
-#     disarms the guard. On failure: restores the old binary and config,
-#     restarts, verifies, disarms. If that restore fails, the guard stays
-#     armed and retries (3 attempts, then it records needs-human and stops).
+#     disarms the guard. On failure, rollback in this order: install the old
+#     binary, restart onto it and wait for /healthz, then put the config back,
+#     then check /v1/models and 10 s of stability, and disarm. A failed config
+#     restore does not stop the rollback: the old binary accepts the edited
+#     config, so the service comes back on it and the RESULT line says
+#     "CONFIG RECOVERY INCOMPLETE" with the key left and the backup path
+#     (state config_restored=no). If the rollback fails, the guard stays armed
+#     and retries.
+#  8. The guard counts attempts in the state file: the count is written before
+#     an attempt starts and read back before the next, so an attempt that is
+#     killed or times out still counts. After 3 attempts, the next tick makes
+#     one final action (written as started before it runs, never repeated):
+#     install and start the old binary, try the config. Then it records
+#     needs-human, with a RESULT line saying what is actually running (old
+#     binary up, CANDIDATE STILL RUNNING, or nothing healthy) and whether the
+#     config was restored, and disarms.
 #
 # No management endpoint is called, so a deploy uses zero failed management
 # logins (the old script's X-CPA-VERSION probe used one per process).
@@ -68,13 +87,15 @@
 # and the guard finishes the restore.
 # The guard restores unless success is recorded by deploy start + 930 s, or as
 # soon as the deploy unit is gone without success (checked every 10 s). One
-# guard attempt is at most 480 s (TimeoutStartSec; summed bound 470 s); it
-# makes at most 3 attempts, then records needs-human and stops.
+# guard run is at most 480 s (TimeoutStartSec; summed bound 470 s); it makes at
+# most 3 attempts and one final action, each on its own run, then records
+# needs-human and stops.
 # Measured in rehearsal: success 31 s; recovery 11-21 s after a killed deploy.
-# Worst case to a final state: 900 + 10 + 10 + 3 x 490 = 2390 s (about 40 min).
+# Worst case to a final state: 900 + 10 + 10 + 4 x 490 = 2880 s (48 min).
 #
 # Exit codes: 0 deployed, or already deployed; 1 the candidate failed and the
-# old binary is back and healthy; 2 refused or aborted with nothing changed;
+# old binary is back and healthy (check the RESULT line for CONFIG RECOVERY
+# INCOMPLETE); 2 refused or aborted with nothing changed;
 # 3 rollback failed in this shell, the guard is armed and retrying;
 # 4 another deploy holds the lock.
 #
@@ -82,7 +103,9 @@
 #
 # VPE_REHEARSAL_DIR=/tmp/<dir> switches every path, unit name, guard name and
 # port to throwaway values read from <dir>/rehearsal.conf, and enables fault
-# hooks read from <dir>/faults. It refuses to run if any of them resolves to
+# hooks read from <dir>/faults (pause_at=<comma list of swap, checks,
+# restore, restore-config, final>, restore_fail_once=1, restore_fail_always=1).
+# It refuses to run if any of them resolves to
 # the live directory, unit or port. Without it, the pins below are constants
 # and no environment variable changes them.
 set -uo pipefail
@@ -161,11 +184,12 @@ fault() { # name -> value, rehearsal only
 	[[ "$REHEARSAL" == 1 && -f "$R/faults" ]] || return 0
 	awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$R/faults"
 }
-pause_hook() { # rehearsal: stop here so the harness can kill this unit
-	[[ "$(fault pause_at)" == "$1" ]] || return 0
+pause_hook() { # rehearsal: stop here until the harness kills this unit or deletes the marker
+	[[ ",$(fault pause_at)," == *",$1,"* ]] || return 0
 	log "  [rehearsal] paused at $1"
 	: >"$R/paused-$1"
-	sleep 300
+	local i
+	for ((i = 0; i < 300; i++)); do [[ -f "$R/paused-$1" ]] || { log "  [rehearsal] resumed at $1"; return 0; }; sleep 1; done
 }
 
 state_get() { [[ -f "$STATE" ]] && awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$STATE"; }
@@ -177,7 +201,9 @@ state_set() { # key value [key value ...], atomic rewrite
 			!($1 in skip)' "$STATE"
 		local i
 		for ((i = 0; i < ${#args[@]}; i += 2)); do printf '%s=%s\n' "${args[i]}" "${args[i+1]}"; done
-	} >"$tmp" && sync "$tmp" 2>/dev/null; mv -f "$tmp" "$STATE"
+	} >"$tmp" || { rm -f "$tmp"; log "  WARNING: could not write $STATE"; return 1; }
+	sync "$tmp" 2>/dev/null
+	mv -f "$tmp" "$STATE" || { rm -f "$tmp"; log "  WARNING: could not replace $STATE"; return 1; }
 }
 is_final() { [[ "$1" == succeeded || "$1" == rolled-back || "$1" == recovered || "$1" == needs-human || "$1" == nothing-changed ]]; }
 
@@ -344,50 +370,122 @@ disarm_guard() {
 
 # ---------------------------------------------------------------- restore
 
-# Idempotent: puts back the pinned old binary and the pre-deploy config, then
-# restarts only if the running process is not already the healthy old binary.
-restore_old() {
-	local cfg_before cur
-	cfg_before="$(state_get config_sha_before)"
-	if [[ "$(sha_of "$LIVE_BIN")" != "$OLD_SHA" ]]; then
-		install_file "$BIN_BACKUP" "$LIVE_BIN" "$OLD_SHA" 755 || return 1
-		log "  restored $OLD_VERSION binary"
-	fi
-	cur="$(sha_of "$CONFIG")"
-	if [[ -n "$cfg_before" && "$cur" != "$cfg_before" ]]; then
-		install_file "$CONFIG_BACKUP" "$CONFIG" "$cfg_before" 600 || return 1
-		log "  restored the pre-deploy config"
-	fi
+# Make the unit run the pinned old binary and answer /healthz. Restarts only if
+# the running process is not already that. Expects the old binary installed.
+start_old() {
 	local pid
 	pid="$(unit_prop MainPID)"
 	if [[ "$(unit_prop ActiveState)" == active && "$pid" != 0 && "$(sha_of "/proc/$pid/exe")" == "$OLD_SHA" &&
 		"$(http_code "$BASE/healthz")" == 200 ]]; then
 		RUN_PID="$pid"
 		log "  $UNIT already runs $OLD_VERSION and answers; no restart needed"
-	else
-		if [[ "$(fault restore_fail_always)" == 1 ]]; then
-			log "  [rehearsal] injected failure: restart of $UNIT fails (every time)"
-			return 1
-		fi
-		if [[ "$(fault restore_fail_once)" == 1 && ! -f "$R/restore-failed-once" ]]; then
-			: >"$R/restore-failed-once"
-			log "  [rehearsal] injected failure: restart of $UNIT fails"
-			return 1
-		fi
-		sc reset-failed "$UNIT" >/dev/null 2>&1
-		sc restart --no-block "$UNIT" || { log "  systemctl restart $UNIT failed"; return 1; }
-		wait_up "$OLD_SHA" "$RESTORE_WAIT" || { log "  $OLD_VERSION not active and answering within ${RESTORE_WAIT}s"; return 1; }
-		log "  pid $RUN_PID runs $OLD_VERSION, /healthz 200"
+		return 0
 	fi
+	if [[ "$(fault restore_fail_always)" == 1 ]]; then
+		log "  [rehearsal] injected failure: restart of $UNIT fails (every time)"
+		return 1
+	fi
+	if [[ "$(fault restore_fail_once)" == 1 && ! -f "$R/restore-failed-once" ]]; then
+		: >"$R/restore-failed-once"
+		log "  [rehearsal] injected failure: restart of $UNIT fails"
+		return 1
+	fi
+	sc reset-failed "$UNIT" >/dev/null 2>&1
+	sc restart --no-block "$UNIT" || { log "  systemctl restart $UNIT failed"; return 1; }
+	wait_up "$OLD_SHA" "$RESTORE_WAIT" || { log "  $OLD_VERSION not active and answering within ${RESTORE_WAIT}s"; return 1; }
+	log "  pid $RUN_PID runs $OLD_VERSION, /healthz 200"
+}
+
+# Put the pre-deploy config back. Never fatal: the old binary accepts the
+# edited config (its one extra key) at start and on hot reload, so a failure
+# here is reported (CONFIG_NOTE, state config_restored=no) and nothing else.
+CONFIG_NOTE=""
+restore_config() {
+	local before cur what
+	before="$(state_get config_sha_before)"
+	cur="$(sha_of "$CONFIG")"
+	if [[ -n "$before" && "$cur" == "$before" ]]; then state_set config_restored yes; return 0; fi
+	pause_hook restore-config
+	if [[ -n "$before" ]] && install_file "$CONFIG_BACKUP" "$CONFIG" "$before" 600; then
+		log "  restored the pre-deploy config"
+		state_set config_restored yes
+		return 0
+	fi
+	if grep -qxF "$CONFIG_MARK" "$CONFIG" 2>/dev/null; then
+		what="it still has the top-level claude: block (server-side-fallback: true) this deploy added"
+	else
+		what="its sha ${cur:0:12} is not the pre-deploy sha ${before:0:12}"
+	fi
+	CONFIG_NOTE="CONFIG RECOVERY INCOMPLETE: $CONFIG: $what; restoring it from $CONFIG_BACKUP failed (pre-deploy sha ${before:0:12}); $OLD_VERSION runs with it as it is"
+	log "  $CONFIG_NOTE"
+	state_set config_restored no
+	return 0
+}
+
+# Idempotent. Order: what gets a working service back comes first. Installs the
+# pinned old binary, makes the unit run it, then puts the config back (not
+# fatal), then checks /v1/models and stability.
+restore_old() {
+	pause_hook restore
+	if [[ "$(sha_of "$LIVE_BIN")" != "$OLD_SHA" ]]; then
+		install_file "$BIN_BACKUP" "$LIVE_BIN" "$OLD_SHA" 755 || return 1
+		log "  restored $OLD_VERSION binary"
+	fi
+	start_old || return 1
+	restore_config
 	if make_auth_headers; then check_models; local m=$?; drop_auth_headers; (( m == 0 )) || return 1; fi
 	stable_for "$RESTORE_STABLE"
+}
+
+# Guard, once the attempt limit is used up. Runs on its own tick, at most once
+# (final_action is persisted before it starts, so a kill is not repeated): put
+# the old binary in place and start it, try the config, then record
+# needs-human with what is actually installed and running.
+guard_give_up() { # attempts
+	if [[ -z "$(state_get final_action)" ]]; then
+		state_set final_action started || guard_stop_unwritable
+		log "guard: $1 of $GUARD_ATTEMPTS restore attempts used; final action (runs once): install and start $OLD_VERSION"
+		pause_hook final
+		if [[ "$(sha_of "$LIVE_BIN")" == "$OLD_SHA" ]] || { install_file "$BIN_BACKUP" "$LIVE_BIN" "$OLD_SHA" 755 && log "  restored $OLD_VERSION binary"; }; then
+			start_old && restore_config
+		else
+			log "  final action: could not install $OLD_VERSION"
+		fi
+		state_set final_action done
+	else
+		log "guard: the final action was cut off on an earlier tick (final_action=$(state_get final_action)); not repeating it"
+	fi
+	local inst pid run hz cfg check svc
+	inst="$(sha_of "$LIVE_BIN")"; pid="$(unit_prop MainPID)"
+	run="$(sha_of "/proc/${pid:-0}/exe")"; hz="$(http_code "$BASE/healthz")"
+	if [[ "$run" == "$OLD_SHA" && "$hz" == 200 ]]; then
+		check=old-serving; svc="SERVICE IS UP ON $OLD_VERSION (pid $pid, /healthz 200) but its restore did not complete its checks"
+	elif [[ "$run" == "$NEW_SHA" ]]; then
+		check=candidate-running; svc="CANDIDATE $NEW_VERSION IS STILL RUNNING (pid $pid, /healthz $hz); $OLD_VERSION is NOT running"
+	else
+		check=down; svc="NOTHING HEALTHY IS RUNNING (pid ${pid:-none}, running sha ${run:0:12}, /healthz $hz)"
+	fi
+	if [[ "$(sha_of "$CONFIG")" == "$(state_get config_sha_before)" ]]; then cfg="config is the pre-deploy one"
+	elif grep -qxF "$CONFIG_MARK" "$CONFIG" 2>/dev/null; then cfg="CONFIG NOT RESTORED: it still has the top-level claude: block this deploy added"
+	else cfg="CONFIG NOT RESTORED: sha differs from pre-deploy"; fi
+	state_set phase needs-human final_check "$check" finished "$(date -u +%FT%TZ)"
+	disarm_guard
+	log "RESULT: NEEDS A HUMAN. Guard used $1 of $GUARD_ATTEMPTS restore attempts and its final action. $svc. Installed sha ${inst:0:12} (old ${OLD_SHA:0:12}, new ${NEW_SHA:0:12}); $cfg. Old binary at $BIN_BACKUP; config backup $CONFIG_BACKUP"
+	exit 1
+}
+
+# The state file cannot be written, so attempts cannot be counted: stop.
+guard_stop_unwritable() {
+	disarm_guard
+	log "RESULT: NEEDS A HUMAN. The guard cannot write $STATE, so it cannot count restore attempts; it has stopped without restoring. Installed sha $(sha_of "$LIVE_BIN" | cut -c1-12), running sha $(sha_of "/proc/$(unit_prop MainPID)/exe" | cut -c1-12) (old ${OLD_SHA:0:12}); old binary at $BIN_BACKUP; config backup $CONFIG_BACKUP"
+	exit 1
 }
 
 # ---------------------------------------------------------------- commands
 
 cmd_status() {
 	if [[ ! -f "$STATE" ]]; then echo "no deploy recorded in $STATE_DIR"; exit 0; fi
-	grep -E '^(phase|deploy_unit|started|deadline|log|guard_attempts|finished)=' "$STATE"
+	grep -E '^(phase|deploy_unit|started|deadline|log|guard_attempts|final_action|final_check|config_restored|finished)=' "$STATE"
 	echo "guard timer: $(sc is-active "$GUARD.timer" 2>/dev/null)"
 	echo "installed sha: $(sha_of "$LIVE_BIN" | cut -c1-12) (old ${OLD_SHA:0:12}, new ${NEW_SHA:0:12})"
 }
@@ -517,7 +615,7 @@ rollback_and_exit() {
 	if restore_old; then
 		state_set phase rolled-back finished "$(date -u +%FT%TZ)"
 		disarm_guard
-		log "RESULT: rolled back; $OLD_VERSION is live and healthy. Candidate left at $NEW_BIN"
+		log "RESULT: rolled back; $OLD_VERSION is live and healthy. Candidate left at $NEW_BIN${CONFIG_NOTE:+. $CONFIG_NOTE}"
 		exit 1
 	fi
 	state_set phase rollback-failed
@@ -530,7 +628,9 @@ cmd_guard() {
 	LOG="$(state_get log)"; [[ -n "$LOG" ]] || LOG="$LOG_DIR/guard.log"
 	local phase deploy_unit deadline active
 	phase="$(state_get phase)"
-	if is_final "$phase"; then log "guard: deploy resolved (phase=$phase); disarming"; disarm_guard; exit 0; fi
+	# A tick that finds the deploy resolved logs to guard.log, so the deploy log
+	# still ends with its RESULT line.
+	if is_final "$phase"; then LOG="$LOG_DIR/guard.log"; log "guard: deploy resolved (phase=$phase); disarming"; disarm_guard; exit 0; fi
 	deploy_unit="$(state_get deploy_unit)"; deadline="$(state_get deadline)"
 	active="$(sc is-active "$deploy_unit" 2>/dev/null)"
 	if [[ "$active" =~ ^(active|activating|deactivating|reloading)$ ]] && (( $(now) < deadline )); then exit 0; fi
@@ -544,24 +644,30 @@ cmd_guard() {
 	exec 9>>"$LOCK"
 	flock -w 60 9 || { log "guard: could not take the lock within 60s; will retry"; exit 1; }
 	phase="$(state_get phase)"
-	if is_final "$phase"; then log "guard: deploy resolved meanwhile (phase=$phase); disarming"; disarm_guard; exit 0; fi
+	if is_final "$phase"; then LOG="$LOG_DIR/guard.log"; log "guard: deploy resolved meanwhile (phase=$phase); disarming"; disarm_guard; exit 0; fi
 
-	local attempts=$(( $(state_get guard_attempts) + 1 ))
-	state_set guard_attempts "$attempts"
+	# The attempt count is persisted before each attempt and checked from the
+	# state file before the next, so a killed or timed-out attempt still counts.
+	local attempts
+	attempts="$(state_get guard_attempts)"
+	if ! [[ "$attempts" =~ ^[0-9]+$ ]]; then
+		log "guard: attempt count unreadable; treating the limit as reached"; attempts=$GUARD_ATTEMPTS
+	fi
+	if (( attempts >= GUARD_ATTEMPTS )); then guard_give_up "$attempts"; fi
+	attempts=$((attempts + 1))
+	state_set guard_attempts "$attempts" && [[ "$(state_get guard_attempts)" == "$attempts" ]] || guard_stop_unwritable
 	log "guard: restore attempt $attempts/$GUARD_ATTEMPTS"
 	if restore_old; then
 		state_set phase recovered finished "$(date -u +%FT%TZ)"
 		disarm_guard
-		log "RESULT: guard restored $OLD_VERSION; live and healthy"
+		log "RESULT: guard restored $OLD_VERSION; live and healthy${CONFIG_NOTE:+. $CONFIG_NOTE}"
 		exit 0
 	fi
 	if (( attempts >= GUARD_ATTEMPTS )); then
-		state_set phase needs-human
-		log "RESULT: NEEDS A HUMAN. Guard failed $attempts times. Installed sha $(sha_of "$LIVE_BIN" | cut -c1-12), running sha $(sha_of "/proc/$(unit_prop MainPID)/exe" | cut -c1-12) (old ${OLD_SHA:0:12}); old binary at $BIN_BACKUP; config backup $CONFIG_BACKUP"
-		disarm_guard
-		exit 1
+		log "guard: attempt $attempts failed; the next tick makes the final action and records needs-human"
+	else
+		log "guard: attempt $attempts failed; retrying on the next tick"
 	fi
-	log "guard: attempt $attempts failed; retrying on the next tick"
 	exit 1
 }
 
