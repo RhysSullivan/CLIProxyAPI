@@ -166,7 +166,10 @@ type accountState struct {
 }
 
 type account struct {
-	authID                 string
+	authID string
+	// fiveHourIdle records an explicit "five_hour": null in a Claude usage
+	// response: no session window is open. It feeds cooldown reconciliation only.
+	fiveHourIdle           bool
 	Routing                *coreauth.RoutingAvailability `json:"routing,omitempty"`
 	Provider               string                        `json:"provider"`
 	Email                  string                        `json:"email"`
@@ -403,7 +406,7 @@ func (h *Handler) refreshDue(ctx context.Context, force bool) {
 		if errFetch == nil && rec.Provider == providerClaude && h.manager != nil {
 			h.manager.ReconcileClaudeUsage(ctx, coreauth.ClaudeUsageObservation{
 				AuthID: rec.Filename, AccessToken: rec.Token, StartedAt: fetchedAt,
-				FiveHourUtil: a.FiveHourUtil, SevenDayUtil: a.SevenDayUtil,
+				FiveHourUtil: a.FiveHourUtil, SevenDayUtil: a.SevenDayUtil, FiveHourIdle: a.fiveHourIdle,
 			})
 		}
 	}
@@ -610,6 +613,9 @@ func (h *Handler) fetchClaude(ctx context.Context, rec authAccount, fetchedAt ti
 	if v := ojson.GetBytes(usage, "five_hour.utilization"); v.Type == ojson.Number {
 		f := v.Float()
 		a.FiveHourUtil = &f
+	}
+	if v := ojson.GetBytes(usage, "five_hour"); v.Type == ojson.Null && v.Raw == "null" {
+		a.fiveHourIdle = true
 	}
 	a.FiveHourResetsAt = ojson.GetBytes(usage, "five_hour.resets_at").String()
 	a.PrimaryWindowSeconds = 18000

@@ -20,6 +20,10 @@ type ClaudeUsageObservation struct {
 	StartedAt    time.Time
 	FiveHourUtil *float64
 	SevenDayUtil *float64
+	// FiveHourIdle reports that the response carried "five_hour": null, which
+	// Anthropic sends when no session window is open (for example right after a
+	// usage reset). A missing or malformed five_hour field is not idle.
+	FiveHourIdle bool
 }
 
 // ReconcileClaudeUsage releases an old credential quota when a newer usage
@@ -32,7 +36,7 @@ func (m *Manager) ReconcileClaudeUsage(ctx context.Context, observation ClaudeUs
 func (m *Manager) reconcileClaudeUsage(ctx context.Context, observation ClaudeUsageObservation, now time.Time) bool {
 	if m == nil || observation.AuthID == "" || observation.AccessToken == "" ||
 		observation.StartedAt.IsZero() || observation.StartedAt.After(now) || now.Sub(observation.StartedAt) > claudeUsageObservationMaxAge ||
-		!healthyClaudeUsage(observation.FiveHourUtil) || !healthyClaudeUsage(observation.SevenDayUtil) {
+		!claudeSessionHasCapacity(observation) || !healthyClaudeUsage(observation.SevenDayUtil) {
 		return false
 	}
 	releaseMutation := m.lockAuthMutation(observation.AuthID)
@@ -82,6 +86,15 @@ func (m *Manager) reconcileClaudeUsage(ctx context.Context, observation ClaudeUs
 	registry.GetGlobalRegistry().ApplyClientModelProjections(snapshot.ID, epoch, snapshot.Generation, projections)
 	m.persistCooldownStates(ctx)
 	return true
+}
+
+// claudeSessionHasCapacity accepts a reported five-hour utilization below the
+// limit, or an idle session window with no utilization at all.
+func claudeSessionHasCapacity(observation ClaudeUsageObservation) bool {
+	if observation.FiveHourUtil == nil {
+		return observation.FiveHourIdle
+	}
+	return healthyClaudeUsage(observation.FiveHourUtil)
 }
 
 func healthyClaudeUsage(util *float64) bool {
