@@ -65,6 +65,23 @@ func TestClaudeUsageReconciliationReleasesSchedulerAndPersistence(t *testing.T) 
 	}
 }
 
+func TestClaudeUsageReconciliationReleasesIdleSessionWindow(t *testing.T) {
+	id := "usage-idle-session@example.test.json"
+	m, now := newClaudeUsageCooldown(t, id)
+	o := healthyClaudeObservation(id, now)
+	o.FiveHourUtil = nil
+	o.FiveHourIdle = true
+	if !m.reconcileClaudeUsage(context.Background(), o, now) {
+		t.Fatal("an idle session window with weekly capacity did not release the stale cooldown")
+	}
+	if picked, err := m.scheduler.pickSingle(context.Background(), "claude", "usage-model-a", cliproxyexecutor.Options{}, nil); err != nil || picked == nil {
+		t.Fatalf("scheduler remained blocked: %v", err)
+	}
+	if status := m.RoutingAvailability(id, now); status.Status != "ready" {
+		t.Fatalf("routing status = %+v", status)
+	}
+}
+
 func TestClaudeUsageReconciliationPreservesIndependentBlocks(t *testing.T) {
 	id := "usage-independent@example.test.json"
 	m, now := newClaudeUsageCooldown(t, id)
@@ -107,6 +124,12 @@ func TestClaudeUsageReconciliationRejectsUnsafeObservations(t *testing.T) {
 		{"weekly exhausted", func(o *ClaudeUsageObservation, _ *Auth, _ time.Time) { v := 100.0; o.SevenDayUtil = &v }},
 		{"session exhausted", func(o *ClaudeUsageObservation, _ *Auth, _ time.Time) { v := 100.0; o.FiveHourUtil = &v }},
 		{"weekly missing", func(o *ClaudeUsageObservation, _ *Auth, _ time.Time) { o.SevenDayUtil = nil }},
+		{"session unknown", func(o *ClaudeUsageObservation, _ *Auth, _ time.Time) { o.FiveHourUtil = nil }},
+		{"idle flag with exhausted session", func(o *ClaudeUsageObservation, _ *Auth, _ time.Time) {
+			v := 100.0
+			o.FiveHourUtil = &v
+			o.FiveHourIdle = true
+		}},
 		{"invalid utilization", func(o *ClaudeUsageObservation, _ *Auth, _ time.Time) { v := math.NaN(); o.FiveHourUtil = &v }},
 		{"negative utilization", func(o *ClaudeUsageObservation, _ *Auth, _ time.Time) { v := -1.0; o.FiveHourUtil = &v }},
 		{"stale report", func(o *ClaudeUsageObservation, _ *Auth, now time.Time) { o.StartedAt = now.Add(-6 * time.Minute) }},
